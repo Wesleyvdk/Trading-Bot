@@ -22,6 +22,9 @@ anyhow = "1.0"
 hmac = "0.12"
 sha2 = "0.10"
 base64 = "0.21"
+dotenv = "0.15"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "bigdecimal"] }
+bigdecimal = "0.4"
 
 [profile.release]
 lto = "fat"

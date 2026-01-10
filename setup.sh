@@ -3,16 +3,25 @@ set -e
 
 echo "Starting Environment Setup..."
 
-# 1. Install Dependencies (Amazon Linux 2023)
-echo "Installing System Dependencies..."
-sudo dnf update -y
-sudo dnf install -y git gcc openssl-devel pkgconfig
+# 1. Install Dependencies
+if command -v apt-get &> /dev/null; then
+    echo "Detected Debian/Ubuntu system..."
+    sudo apt-get update -y
+    sudo apt-get install -y git build-essential libssl-dev pkg-config
+elif command -v dnf &> /dev/null; then
+    echo "Detected Amazon Linux/Fedora system..."
+    sudo dnf update -y
+    sudo dnf install -y git gcc openssl-devel pkgconfig
+else
+    echo "Unsupported package manager. Please install git, gcc, openssl, and pkg-config manually."
+    exit 1
+fi
 
 # 2. Install Rust
 if ! command -v cargo &> /dev/null; then
     echo "Installing Rust..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
+    . "$HOME/.cargo/env"
 else
     echo "Rust is already installed."
 fi

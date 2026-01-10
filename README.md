@@ -14,8 +14,12 @@ High-frequency trading bot for Polymarket arbitrage, written in Rust.
     - `alloy` for local signing.
 
 ## Prerequisites
-- **OS**: Amazon Linux 2023 (Recommended) or Ubuntu 22.04.
-- **Hardware**: Compute Optimized (c6i.xlarge or better) for stable clock speeds.
+## Prerequisites
+- **OS**: Amazon Linux 2023 (Standard AMI) **OR** Ubuntu 24.04/22.04.
+    - **Amazon Linux**: Search `Amazon Linux 2023 AMI x86_64 HVM kernel-6.1`.
+    - **Ubuntu**: Standard Server image.
+- **Hardware**: Compute Optimized (`c7i.xlarge` preferred, `c6i.xlarge` acceptable).
+    - **Why**: `c7i` uses DDR5 memory (lower latency) and 4th Gen Intel Xeon chips.
 - **Network**: AWS `eu-west-2` (London) for proximity to Polymarket/Binance servers.
 
 ## Setup & Deployment
