@@ -109,12 +109,80 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
             println!(" Size:     ${:.2}", size_f);
             
             // Execute trade (live or simulated)
+            let mut order_success = false;
+            let mut order_id: Option<String> = None;
+            
             if LIVE_MODE {
-                if let Some(ref _client) = poly_client {
-                    println!(" Status:   ⏳ SUBMITTING ORDER...");
-                    println!(" Status:   ✅ ORDER SUBMITTED (simulated)");
-                    total_balance += profit;
-                    total_profit += profit;
+                if let Some(ref client) = poly_client {
+                    println!(" Status:   ⏳ FETCHING MARKET...");
+                    
+                    // Fetch active markets for this asset
+                    match client.fetch_crypto_markets(asset_name).await {
+                        Ok(markets) => {
+                            if let Some(market) = markets.first() {
+                                // Find the correct token (YES or NO)
+                                let target_outcome = if trade.side == 0 { "Yes" } else { "No" };
+                                if let Some(token) = market.tokens.iter().find(|t| t.outcome == target_outcome) {
+                                    println!(" Token ID: {}...", &token.token_id[..20.min(token.token_id.len())]);
+                                    
+                                    // Create the order
+                                    let order = crate::polymarket::Order {
+                                        token_id: token.token_id.clone(),
+                                        price: price_f,
+                                        size: size_f,
+                                        side: if is_sell { 
+                                            crate::polymarket::OrderSide::SELL 
+                                        } else { 
+                                            crate::polymarket::OrderSide::BUY 
+                                        },
+                                        fee_rate_bps: 0,
+                                        nonce: trade_count,
+                                        expiration: 0, // No expiration
+                                        neg_risk: market.neg_risk.unwrap_or(false),
+                                        tick_size: market.minimum_tick_size.clone().unwrap_or("0.001".to_string()),
+                                    };
+                                    
+                                    println!(" Status:   ⏳ SIGNING ORDER...");
+                                    
+                                    // Sign and submit the order
+                                    match client.create_signed_order(&order).await {
+                                        Ok(signed_order) => {
+                                            println!(" Status:   ⏳ SUBMITTING TO CLOB...");
+                                            
+                                            match client.place_order(signed_order).await {
+                                                Ok(response) => {
+                                                    if response.success {
+                                                        order_success = true;
+                                                        order_id = response.order_id.clone();
+                                                        println!(" Status:   ✅ ORDER PLACED: {}", 
+                                                            response.order_id.unwrap_or("unknown".to_string()));
+                                                        total_balance += profit;
+                                                        total_profit += profit;
+                                                    } else {
+                                                        println!(" Status:   ❌ ORDER REJECTED: {}", 
+                                                            response.error_msg.unwrap_or("unknown error".to_string()));
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    println!(" Status:   ❌ ORDER FAILED: {}", e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            println!(" Status:   ❌ SIGNING FAILED: {}", e);
+                                        }
+                                    }
+                                } else {
+                                    println!(" Status:   ❌ TOKEN NOT FOUND for outcome: {}", target_outcome);
+                                }
+                            } else {
+                                println!(" Status:   ❌ NO ACTIVE MARKETS for {}", asset_name);
+                            }
+                        }
+                        Err(e) => {
+                            println!(" Status:   ❌ MARKET FETCH FAILED: {}", e);
+                        }
+                    }
                 } else {
                     println!(" Status:   ❌ NO API CLIENT - Skipped");
                 }
@@ -123,6 +191,7 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
                 let message = format!("Buy {} at {}", if trade.side == 0 { "YES" } else { "NO" }, trade.price_cents).into_bytes();
                 let signature = signer.sign_message(&message).await.expect("Signing failed");
                 
+                order_success = true;
                 total_balance += profit;
                 total_profit += profit;
                 

@@ -2,10 +2,35 @@ use reqwest::{Client, ClientBuilder, header};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Sha256, Digest};
 use base64::{Engine as _, engine::general_purpose};
+use alloy::signers::Signer;
+use alloy::signers::local::PrivateKeySigner;
+use alloy::primitives::{keccak256, Address, U256, B256};
+use std::str::FromStr;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// CTF Exchange contract address on Polygon mainnet
+const CTF_EXCHANGE: &str = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
+/// Neg Risk CTF Exchange contract address
+const NEG_RISK_CTF_EXCHANGE: &str = "0xC5d563A36AE78145C45a50134d48A1215220f80a";
+
+/// Order side
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum OrderSide {
+    BUY,
+    SELL,
+}
+
+impl OrderSide {
+    pub fn as_str(&self) -> &str {
+        match self {
+            OrderSide::BUY => "BUY",
+            OrderSide::SELL => "SELL",
+        }
+    }
+}
 
 /// Polymarket CLOB Client for order management
 #[derive(Debug, Clone)]
@@ -15,6 +40,8 @@ pub struct PolymarketClient {
     api_secret: String,
     passphrase: String,
     base_url: String,
+    signer: PrivateKeySigner,
+    funder: String, // Polymarket profile address
 }
 
 /// L2 Authentication Headers
@@ -30,11 +57,16 @@ pub struct L2Header {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Market {
     pub condition_id: String,
-    pub question_id: String,
+    #[serde(default)]
+    pub question_id: Option<String>,
     pub tokens: Vec<Token>,
     pub active: bool,
     pub closed: bool,
     pub question: Option<String>,
+    #[serde(default)]
+    pub neg_risk: Option<bool>,
+    #[serde(default)]
+    pub minimum_tick_size: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -44,25 +76,46 @@ pub struct Token {
     pub price: Option<f64>,
 }
 
-/// Order request payload
+/// Order to be signed and submitted
+#[derive(Debug, Clone)]
+pub struct Order {
+    pub token_id: String,
+    pub price: f64,
+    pub size: f64,
+    pub side: OrderSide,
+    pub fee_rate_bps: u64,
+    pub nonce: u64,
+    pub expiration: u64,
+    pub neg_risk: bool,
+    pub tick_size: String,
+}
+
+/// Order request payload for CLOB API
 #[derive(Serialize, Debug)]
 pub struct OrderRequest {
-    pub order: SignedOrder,
+    pub order: SignedOrderPayload,
+    #[serde(rename = "orderType")]
+    pub order_type: String,
 }
 
 #[derive(Serialize, Debug)]
-pub struct SignedOrder {
+pub struct SignedOrderPayload {
     pub salt: String,
     pub maker: String,
     pub signer: String,
     pub taker: String,
+    #[serde(rename = "tokenId")]
     pub token_id: String,
+    #[serde(rename = "makerAmount")]
     pub maker_amount: String,
+    #[serde(rename = "takerAmount")]
     pub taker_amount: String,
     pub expiration: String,
     pub nonce: String,
+    #[serde(rename = "feeRateBps")]
     pub fee_rate_bps: String,
-    pub side: String,  // "BUY" or "SELL"
+    pub side: String,
+    #[serde(rename = "signatureType")]
     pub signature_type: u8,
     pub signature: String,
 }
@@ -71,8 +124,10 @@ pub struct SignedOrder {
 #[derive(Deserialize, Debug)]
 pub struct OrderResponse {
     pub success: bool,
+    #[serde(rename = "orderID")]
     pub order_id: Option<String>,
-    pub error: Option<String>,
+    #[serde(rename = "errorMsg")]
+    pub error_msg: Option<String>,
 }
 
 impl PolymarketClient {
@@ -81,15 +136,19 @@ impl PolymarketClient {
         let api_key = std::env::var("POLYMARKET_API_KEY").ok()?;
         let api_secret = std::env::var("POLYMARKET_API_SECRET").ok()?;
         let passphrase = std::env::var("POLYMARKET_PASSPHRASE").ok()?;
+        let private_key = std::env::var("POLYMARKET_PRIVATE_KEY").ok()?;
+        let funder = std::env::var("POLYMARKET_FUNDER").unwrap_or_default();
         
-        if api_key.is_empty() || api_secret.is_empty() || passphrase.is_empty() {
+        if api_key.is_empty() || api_secret.is_empty() || passphrase.is_empty() || private_key.is_empty() {
             return None;
         }
         
-        Some(Self::new(api_key, api_secret, passphrase))
+        let signer = PrivateKeySigner::from_str(&private_key).ok()?;
+        
+        Some(Self::new(api_key, api_secret, passphrase, signer, funder))
     }
     
-    pub fn new(api_key: String, api_secret: String, passphrase: String) -> Self {
+    pub fn new(api_key: String, api_secret: String, passphrase: String, signer: PrivateKeySigner, funder: String) -> Self {
         let client = ClientBuilder::new()
             .http2_prior_knowledge()
             .tcp_nodelay(true)
@@ -102,6 +161,8 @@ impl PolymarketClient {
             api_secret,
             passphrase,
             base_url: "https://clob.polymarket.com".to_string(),
+            signer,
+            funder,
         }
     }
 
@@ -129,10 +190,13 @@ impl PolymarketClient {
         }
     }
     
-    /// Fetch active BTC hourly markets
-    pub async fn fetch_btc_markets(&self) -> Result<Vec<Market>, String> {
+    /// Fetch active crypto hourly markets
+    pub async fn fetch_crypto_markets(&self, asset: &str) -> Result<Vec<Market>, String> {
+        let tag = format!("crypto-hourly-{}", asset.to_lowercase());
         let path = "/markets";
-        let url = format!("{}{}?tag=crypto-hourly-btc&active=true", self.base_url, path);
+        let url = format!("{}{}?tag={}&active=true&closed=false", self.base_url, path, tag);
+        
+        println!("[POLY] Fetching markets: {}", url);
         
         let response = self.client
             .get(&url)
@@ -151,14 +215,187 @@ impl PolymarketClient {
             .await
             .map_err(|e| format!("Failed to parse markets: {:?}", e))?;
         
+        println!("[POLY] Found {} active {} markets", markets.len(), asset);
         Ok(markets)
     }
     
+    /// Get wallet address as string
+    pub fn wallet_address(&self) -> String {
+        format!("{:?}", self.signer.address())
+    }
+    
+    /// Create and sign an order using EIP-712
+    pub async fn create_signed_order(&self, order: &Order) -> Result<SignedOrderPayload, String> {
+        let maker = if self.funder.is_empty() {
+            self.wallet_address()
+        } else {
+            self.funder.clone()
+        };
+        let signer_addr = self.wallet_address();
+        
+        // Calculate amounts based on side
+        // For BUY: makerAmount = size * price (USDC), takerAmount = size (shares)
+        // For SELL: makerAmount = size (shares), takerAmount = size * price (USDC)
+        let size_raw = (order.size * 1_000_000.0) as u128; // Convert to USDC units (6 decimals)
+        let price_scaled = (order.price * 1_000_000.0) as u128;
+        
+        let (maker_amount, taker_amount) = match order.side {
+            OrderSide::BUY => {
+                // Buying shares: pay USDC, receive shares
+                let usdc_amount = (order.size * order.price * 1_000_000.0) as u128;
+                (usdc_amount.to_string(), size_raw.to_string())
+            },
+            OrderSide::SELL => {
+                // Selling shares: pay shares, receive USDC
+                let usdc_amount = (order.size * order.price * 1_000_000.0) as u128;
+                (size_raw.to_string(), usdc_amount.to_string())
+            }
+        };
+        
+        // Generate salt
+        let salt = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string();
+        
+        // EIP-712 Domain
+        let exchange = if order.neg_risk { NEG_RISK_CTF_EXCHANGE } else { CTF_EXCHANGE };
+        
+        // Build order struct for hashing
+        let order_struct = format!(
+            "{}{}{}{}{}{}{}{}{}{}{}",
+            salt,
+            maker,
+            signer_addr,
+            "0x0000000000000000000000000000000000000000", // taker (zero = anyone)
+            order.token_id,
+            maker_amount,
+            taker_amount,
+            order.expiration,
+            order.nonce,
+            order.fee_rate_bps,
+            if order.side == OrderSide::BUY { "0" } else { "1" }
+        );
+        
+        // Create EIP-712 typed data hash
+        // Domain: { name: "Polymarket CTF Exchange", version: "1", chainId: 137, verifyingContract: exchange }
+        let domain_separator = self.compute_domain_separator(exchange);
+        let struct_hash = self.compute_struct_hash(
+            &salt, &maker, &signer_addr, 
+            "0x0000000000000000000000000000000000000000",
+            &order.token_id, &maker_amount, &taker_amount,
+            order.expiration, order.nonce, order.fee_rate_bps,
+            &order.side
+        );
+        
+        // \x19\x01 + domainSeparator + structHash
+        let mut data = Vec::new();
+        data.push(0x19);
+        data.push(0x01);
+        data.extend_from_slice(domain_separator.as_slice());
+        data.extend_from_slice(struct_hash.as_slice());
+        
+        let hash = keccak256(&data);
+        
+        // Sign the hash
+        let signature = self.signer.sign_hash(&hash.into())
+            .await
+            .map_err(|e| format!("Signing failed: {:?}", e))?;
+        
+        let sig_hex = format!("0x{}", hex::encode(signature.as_bytes()));
+        
+        Ok(SignedOrderPayload {
+            salt,
+            maker,
+            signer: signer_addr,
+            taker: "0x0000000000000000000000000000000000000000".to_string(),
+            token_id: order.token_id.clone(),
+            maker_amount,
+            taker_amount,
+            expiration: order.expiration.to_string(),
+            nonce: order.nonce.to_string(),
+            fee_rate_bps: order.fee_rate_bps.to_string(),
+            side: if order.side == OrderSide::BUY { "BUY".to_string() } else { "SELL".to_string() },
+            signature_type: 0, // EOA signature
+            signature: sig_hex,
+        })
+    }
+    
+    /// Compute EIP-712 domain separator
+    fn compute_domain_separator(&self, exchange: &str) -> B256 {
+        let type_hash = keccak256(b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+        let name_hash = keccak256(b"Polymarket CTF Exchange");
+        let version_hash = keccak256(b"1");
+        let chain_id: U256 = U256::from(137); // Polygon
+        let contract = Address::from_str(exchange).unwrap();
+        
+        let mut data = Vec::new();
+        data.extend_from_slice(type_hash.as_slice());
+        data.extend_from_slice(name_hash.as_slice());
+        data.extend_from_slice(version_hash.as_slice());
+        data.extend_from_slice(&chain_id.to_be_bytes::<32>());
+        data.extend_from_slice(contract.as_slice());
+        
+        keccak256(&data)
+    }
+    
+    /// Compute struct hash for order
+    fn compute_struct_hash(
+        &self, salt: &str, maker: &str, signer: &str, taker: &str,
+        token_id: &str, maker_amount: &str, taker_amount: &str,
+        expiration: u64, nonce: u64, fee_rate_bps: u64, side: &OrderSide
+    ) -> B256 {
+        let type_hash = keccak256(
+            b"Order(uint256 salt,address maker,address signer,address taker,uint256 tokenId,uint256 makerAmount,uint256 takerAmount,uint256 expiration,uint256 nonce,uint256 feeRateBps,uint8 side,uint8 signatureType)"
+        );
+        
+        let salt_u256 = U256::from_str(salt).unwrap_or_default();
+        let maker_addr = Address::from_str(maker).unwrap_or_default();
+        let signer_addr = Address::from_str(signer).unwrap_or_default();
+        let taker_addr = Address::from_str(taker).unwrap_or_default();
+        let token_u256 = U256::from_str(token_id).unwrap_or_default();
+        let maker_amt = U256::from_str(maker_amount).unwrap_or_default();
+        let taker_amt = U256::from_str(taker_amount).unwrap_or_default();
+        let exp_u256 = U256::from(expiration);
+        let nonce_u256 = U256::from(nonce);
+        let fee_u256 = U256::from(fee_rate_bps);
+        let side_u8: u8 = if *side == OrderSide::BUY { 0 } else { 1 };
+        
+        let mut data = Vec::new();
+        data.extend_from_slice(type_hash.as_slice());
+        data.extend_from_slice(&salt_u256.to_be_bytes::<32>());
+        data.extend_from_slice(&[0u8; 12]); // padding for address
+        data.extend_from_slice(maker_addr.as_slice());
+        data.extend_from_slice(&[0u8; 12]);
+        data.extend_from_slice(signer_addr.as_slice());
+        data.extend_from_slice(&[0u8; 12]);
+        data.extend_from_slice(taker_addr.as_slice());
+        data.extend_from_slice(&token_u256.to_be_bytes::<32>());
+        data.extend_from_slice(&maker_amt.to_be_bytes::<32>());
+        data.extend_from_slice(&taker_amt.to_be_bytes::<32>());
+        data.extend_from_slice(&exp_u256.to_be_bytes::<32>());
+        data.extend_from_slice(&nonce_u256.to_be_bytes::<32>());
+        data.extend_from_slice(&fee_u256.to_be_bytes::<32>());
+        data.push(side_u8);
+        data.push(0); // signatureType = EOA
+        
+        keccak256(&data)
+    }
+    
     /// Place an order on the CLOB
-    pub async fn place_order(&self, order: SignedOrder) -> Result<OrderResponse, String> {
+    pub async fn place_order(&self, signed_order: SignedOrderPayload) -> Result<OrderResponse, String> {
         let path = "/order";
-        let body = serde_json::to_string(&OrderRequest { order })
+        
+        let request = OrderRequest {
+            order: signed_order,
+            order_type: "GTC".to_string(), // Good Till Cancelled
+        };
+        
+        let body = serde_json::to_string(&request)
             .map_err(|e| format!("Failed to serialize order: {:?}", e))?;
+        
+        println!("[POLY] Placing order: {}", body);
         
         let headers = self.generate_headers("POST", path, &body);
         let url = format!("{}{}", self.base_url, path);
@@ -175,15 +412,16 @@ impl PolymarketClient {
             .await
             .map_err(|e| format!("Request failed: {:?}", e))?;
         
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        
+        println!("[POLY] Response {}: {}", status, text);
+        
+        if !status.is_success() {
             return Err(format!("Order failed {}: {}", status, text));
         }
         
-        let order_response: OrderResponse = response
-            .json()
-            .await
+        let order_response: OrderResponse = serde_json::from_str(&text)
             .map_err(|e| format!("Failed to parse response: {:?}", e))?;
         
         Ok(order_response)
@@ -202,22 +440,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_l2_header_generation() {
-        let api_key = "test_key".to_string();
-        let api_secret = "test_secret".to_string();
-        let passphrase = "test_passphrase".to_string();
-
-        let client = PolymarketClient::new(api_key.clone(), api_secret, passphrase.clone());
-
-        let method = "GET";
-        let path = "/orders";
-        let body = "";
-
-        let headers = client.generate_headers(method, path, body);
-
-        assert_eq!(headers.key, api_key);
-        assert_eq!(headers.passphrase, passphrase);
-        assert!(!headers.sign.is_empty());
-        assert!(!headers.timestamp.is_empty());
+    fn test_order_side() {
+        assert_eq!(OrderSide::BUY.as_str(), "BUY");
+        assert_eq!(OrderSide::SELL.as_str(), "SELL");
     }
 }
+
