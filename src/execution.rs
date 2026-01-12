@@ -6,12 +6,10 @@ use rtrb::Consumer;
 use sqlx::PgPool;
 use crate::polymarket::PolymarketClient;
 use crate::database::{DbLogger, TradeLogMsg, insert_wallet_balance};
+use crate::risk::RiskManager;
 
 /// Toggle between live trading and dry run
-const LIVE_MODE: bool = false;  // Set to true to enable real trading
-
-/// Trade size in dollars
-const TRADE_SIZE_DOLLARS: u64 = 1;  // Start with $1 for safety
+const LIVE_MODE: bool = true;  // 🔴 LIVE TRADING ENABLED
 
 pub struct TradeInstruction {
     pub symbol: u64,    // 15 = 15-min market, 60 = 60-min market
@@ -20,9 +18,17 @@ pub struct TradeInstruction {
     pub size: u64,
 }
 
-pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: Arc<DbLogger>, db_pool: PgPool) {
+pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: Arc<DbLogger>, db_pool: PgPool, risk_manager: Arc<RiskManager>) {
     println!("Starting Execution Engine...");
     println!("Mode: {}", if LIVE_MODE { "🔴 LIVE TRADING" } else { "🟢 DRY RUN" });
+    println!("Risk Tier: {} | Trade Size: ${}", risk_manager.current_tier().name(), risk_manager.get_trade_size());
+    
+    // Log startup to activity log
+    db_logger.log_activity("info", "system", 
+        &format!("Execution Engine started: {} mode, {} tier", 
+            if LIVE_MODE { "LIVE" } else { "DRY RUN" }, risk_manager.current_tier().name()),
+        Some(format!(r#"{{"live_mode": {}, "tier": "{}", "trade_size": {}, "max_exposure": {:.2}}}"#,
+            LIVE_MODE, risk_manager.current_tier().name(), risk_manager.get_trade_size(), risk_manager.get_max_exposure())));
     
     // Load Private Key from Environment
     let private_key = std::env::var("POLYMARKET_PRIVATE_KEY").expect("POLYMARKET_PRIVATE_KEY must be set");
@@ -48,11 +54,12 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
         None
     };
 
-    // PnL Tracking
-    let mut total_balance: f64 = 50.0;
+    // PnL Tracking - use starting balance from risk manager
+    let starting_balance = 58.36;
+    let mut total_balance: f64 = starting_balance;
     let mut total_profit: f64 = 0.0;
     let mut trade_count: u64 = 0;
-    let mut last_logged_balance: f64 = 50.0;
+    let mut last_logged_balance: f64 = starting_balance;
 
     loop {
         if let Ok(trade) = consumer.pop() {
@@ -148,13 +155,26 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
             
             // Log trade execution with PnL to activity log
             let pnl_pct = (profit / size_f) * 100.0;
+            
+            // Update risk tier based on P&L
+            let old_tier = risk_manager.current_tier();
+            let new_tier = risk_manager.update_pnl(profit);
+            
+            // Log tier transition if changed
+            if old_tier != new_tier {
+                db_logger.log_activity("info", "system", 
+                    &format!("Risk tier changed: {} → {}", old_tier.name(), new_tier.name()),
+                    Some(format!(r#"{{"old_tier": "{}", "new_tier": "{}", "session_pnl": {:.2}, "new_trade_size": {}}}"#,
+                        old_tier.name(), new_tier.name(), risk_manager.get_session_pnl(), new_tier.trade_size())));
+            }
+            
             db_logger.log_activity(
                 if profit >= 0.0 { "success" } else { "warning" }, 
                 "trade", 
-                &format!("{}: {} | PnL: ${:.2} ({:.1}%) | Balance: ${:.2}", 
-                    ticker, side_db, profit, pnl_pct, total_balance),
-                Some(format!(r#"{{"ticker": "{}", "side": "{}", "price": {:.2}, "size": {:.2}, "pnl": {:.2}, "pnl_pct": {:.2}, "total_balance": {:.2}, "total_profit": {:.2}, "trade_count": {}}}"#,
-                    ticker, side_db, price_f, size_f, profit, pnl_pct, total_balance, total_profit, trade_count)));
+                &format!("{}: {} | PnL: ${:.2} ({:.1}%) | Balance: ${:.2} | Tier: {}", 
+                    ticker, side_db, profit, pnl_pct, total_balance, new_tier.name()),
+                Some(format!(r#"{{"ticker": "{}", "side": "{}", "price": {:.2}, "size": {:.2}, "pnl": {:.2}, "pnl_pct": {:.2}, "total_balance": {:.2}, "total_profit": {:.2}, "trade_count": {}, "tier": "{}", "session_pnl": {:.2}}}"#,
+                    ticker, side_db, price_f, size_f, profit, pnl_pct, total_balance, total_profit, trade_count, new_tier.name(), risk_manager.get_session_pnl())));
             
             // Log wallet balance if changed significantly
             if (total_balance - last_logged_balance).abs() > 0.01 {

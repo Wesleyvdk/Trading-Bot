@@ -4,11 +4,13 @@ mod execution;
 mod polymarket;
 mod types;
 mod database;
+mod risk;
 
 use rtrb::RingBuffer;
 use std::thread;
 use std::sync::Arc;
 use database::{DbLogger, upsert_heartbeat};
+use risk::RiskManager;
 
 #[tokio::main]
 async fn main() {
@@ -29,6 +31,10 @@ async fn main() {
     
     // Create DbLogger for non-blocking writes from sync code
     let db_logger = Arc::new(DbLogger::new(db_pool.clone()));
+    
+    // Initialize Risk Manager with starting balance ($58.36)
+    const STARTING_BALANCE: f64 = 58.36;
+    let risk_manager = Arc::new(RiskManager::new(STARTING_BALANCE));
 
     // 1. Ingestion -> Strategy Ring Buffer (Capacity 1024)
     let (ingestion_prod, strategy_cons) = RingBuffer::<ingestion::MarketUpdate>::new(1024);
@@ -44,8 +50,9 @@ async fn main() {
     // Spawn Execution Thread
     let exec_logger = Arc::clone(&db_logger);
     let exec_pool = db_pool.clone();
+    let exec_risk = Arc::clone(&risk_manager);
     tokio::spawn(async move {
-        execution::run_execution(execution_cons, exec_logger, exec_pool).await;
+        execution::run_execution(execution_cons, exec_logger, exec_pool, exec_risk).await;
     });
 
     // Spawn Heartbeat Task (every 10 seconds)
