@@ -65,13 +65,26 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
             let payout = shares * 1.00;
             let profit = payout - size_f;
             
-            // Determine market type and action
-            let (market_type, is_sell) = match trade.symbol {
-                15 => ("15-MIN", false),
-                60 => ("60-MIN", false),
-                1015 => ("15-MIN", true),  // SELL/EXIT
-                1060 => ("60-MIN", true),  // SELL/EXIT
-                _ => ("UNKNOWN", false),
+            // Decode asset and market type from symbol
+            // Format: asset*100 + market_type (e.g., 160 = BTC 60-min, 215 = ETH 15-min)
+            // SELL format: asset*100 + market_type + 1000 (e.g., 1160 = BTC 60-min SELL)
+            let is_sell = trade.symbol >= 1000;
+            let base_symbol = if is_sell { trade.symbol - 1000 } else { trade.symbol };
+            let asset_id = base_symbol / 100;
+            let market_mins = base_symbol % 100;
+            
+            let asset_name = match asset_id {
+                1 => "BTC",
+                2 => "ETH",
+                3 => "SOL",
+                4 => "XRP",
+                _ => "UNKNOWN",
+            };
+            
+            let market_type = match market_mins {
+                15 => "15-MIN",
+                60 => "60-MIN",
+                _ => "UNKNOWN",
             };
             
             let action = if is_sell { "🔴 STOP-LOSS EXIT" } else { "🟢 ENTRY" };
@@ -83,7 +96,7 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
 
             println!("\n══════════════════════════════════════════════════");
             println!(" {} TRADE #{} - {}", if LIVE_MODE { "🔴 LIVE" } else { "🟢 DRY RUN" }, trade_count, action);
-            println!(" Market:   {} BTC", market_type);
+            println!(" Market:   {} {}", asset_name, market_type);
             println!(" Side:     {}", side_str);
             println!(" Price:    ${:.2}", price_f);
             println!(" Size:     ${:.2}", size_f);
@@ -116,7 +129,7 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
             println!("══════════════════════════════════════════════════\n");
             
             // Log trade to database
-            let ticker = format!("BTC-{}", market_type);
+            let ticker = format!("{}-{}", asset_name, market_type);
             let side_db = if is_sell {
                 if trade.side == 0 { "sell_no" } else { "sell_yes" }
             } else {
@@ -124,7 +137,7 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
             };
             
             db_logger.log_trade(TradeLogMsg {
-                ticker,
+                ticker: ticker.clone(),
                 side: side_db.to_string(),
                 price: price_f,
                 size: size_f,
@@ -132,6 +145,16 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
                 latency_ms: None, // TODO: Calculate tick-to-trade latency
                 pnl: Some(profit),
             });
+            
+            // Log trade execution with PnL to activity log
+            let pnl_pct = (profit / size_f) * 100.0;
+            db_logger.log_activity(
+                if profit >= 0.0 { "success" } else { "warning" }, 
+                "trade", 
+                &format!("{}: {} | PnL: ${:.2} ({:.1}%) | Balance: ${:.2}", 
+                    ticker, side_db, profit, pnl_pct, total_balance),
+                Some(format!(r#"{{"ticker": "{}", "side": "{}", "price": {:.2}, "size": {:.2}, "pnl": {:.2}, "pnl_pct": {:.2}, "total_balance": {:.2}, "total_profit": {:.2}, "trade_count": {}}}"#,
+                    ticker, side_db, price_f, size_f, profit, pnl_pct, total_balance, total_profit, trade_count)));
             
             // Log wallet balance if changed significantly
             if (total_balance - last_logged_balance).abs() > 0.01 {

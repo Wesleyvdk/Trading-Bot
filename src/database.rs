@@ -155,6 +155,33 @@ pub async fn insert_wallet_balance(
     Ok(())
 }
 
+/// Insert an activity log entry.
+/// 
+/// Levels: info, warning, error, success
+/// Categories: trade, strategy, system, position
+pub async fn insert_activity_log(
+    pool: &PgPool,
+    level: &str,
+    category: &str,
+    message: &str,
+    details: Option<&str>,
+) -> Result<(), Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO bot_activity_log (level, category, message, details)
+        VALUES ($1, $2, $3, $4)
+        "#
+    )
+    .bind(level)
+    .bind(category)
+    .bind(message)
+    .bind(details)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
 /// Database log sender that can be used from sync code.
 /// 
 /// This struct holds a channel sender that forwards log requests
@@ -163,6 +190,7 @@ pub async fn insert_wallet_balance(
 pub struct DbLogger {
     strategy_tx: tokio::sync::mpsc::UnboundedSender<StrategyLogMsg>,
     trade_tx: tokio::sync::mpsc::UnboundedSender<TradeLogMsg>,
+    activity_tx: tokio::sync::mpsc::UnboundedSender<ActivityLogMsg>,
 }
 
 pub struct StrategyLogMsg {
@@ -183,11 +211,20 @@ pub struct TradeLogMsg {
     pub pnl: Option<f64>,
 }
 
+/// Activity log message for bot_activity_log table
+pub struct ActivityLogMsg {
+    pub level: String,      // info, warning, error, success
+    pub category: String,   // trade, strategy, system, position
+    pub message: String,
+    pub details: Option<String>,
+}
+
 impl DbLogger {
     /// Create a new DbLogger and spawn background writer tasks.
     pub fn new(pool: PgPool) -> Self {
         let (strategy_tx, mut strategy_rx) = tokio::sync::mpsc::unbounded_channel::<StrategyLogMsg>();
         let (trade_tx, mut trade_rx) = tokio::sync::mpsc::unbounded_channel::<TradeLogMsg>();
+        let (activity_tx, mut activity_rx) = tokio::sync::mpsc::unbounded_channel::<ActivityLogMsg>();
         
         // Spawn strategy log writer
         let pool_clone = pool.clone();
@@ -225,7 +262,23 @@ impl DbLogger {
             }
         });
         
-        Self { strategy_tx, trade_tx }
+        // Spawn activity log writer
+        let pool_clone = pool.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = activity_rx.recv().await {
+                if let Err(e) = insert_activity_log(
+                    &pool_clone,
+                    &msg.level,
+                    &msg.category,
+                    &msg.message,
+                    msg.details.as_deref(),
+                ).await {
+                    eprintln!("[DB] Activity log error: {:?}", e);
+                }
+            }
+        });
+        
+        Self { strategy_tx, trade_tx, activity_tx }
     }
     
     /// Log a strategy tick (non-blocking, fire-and-forget).
@@ -236,5 +289,17 @@ impl DbLogger {
     /// Log a trade execution (non-blocking, fire-and-forget).
     pub fn log_trade(&self, msg: TradeLogMsg) {
         let _ = self.trade_tx.send(msg);
+    }
+    
+    /// Log an activity event (non-blocking, fire-and-forget).
+    /// Levels: info, warning, error, success
+    /// Categories: trade, strategy, system, position
+    pub fn log_activity(&self, level: &str, category: &str, message: &str, details: Option<String>) {
+        let _ = self.activity_tx.send(ActivityLogMsg {
+            level: level.to_string(),
+            category: category.to_string(),
+            message: message.to_string(),
+            details,
+        });
     }
 }

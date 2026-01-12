@@ -33,16 +33,28 @@ async fn connect_with_retry(url: &str) -> WsStream {
     }
 }
 
+/// Symbol ID mapping:
+/// 1 = BTC, 2 = ETH, 3 = SOL, 4 = XRP
+fn get_symbol_id(symbol_str: Option<&str>) -> Option<u64> {
+    match symbol_str {
+        Some("BTCUSDT") => Some(1),
+        Some("ETHUSDT") => Some(2),
+        Some("SOLUSDT") => Some(3),
+        Some("XRPUSDT") => Some(4),
+        _ => None,
+    }
+}
+
 pub async fn run_ingestion(mut producer: Producer<MarketUpdate>) {
     println!("Starting Ingestion Engine...");
     
-    // Binance Connection
-    let binance_url = "wss://stream.binance.com:9443/ws/btcusdt@trade";
+    // Binance Combined Streams - BTC, ETH, SOL, XRP
+    let binance_url = "wss://stream.binance.com:9443/stream?streams=btcusdt@trade/ethusdt@trade/solusdt@trade/xrpusdt@trade";
     
     // Polymarket Connection (CLOB WebSocket - Market Channel)
     let poly_url = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
-    println!("Connecting to Binance: {}", binance_url);
+    println!("Connecting to Binance (BTC, ETH, SOL, XRP): {}", binance_url);
     let binance_stream = connect_with_retry(binance_url).await;
 
     println!("Connecting to Polymarket: {}", poly_url);
@@ -59,33 +71,39 @@ pub async fn run_ingestion(mut producer: Producer<MarketUpdate>) {
                         let mut bytes = text.into_bytes();
                         match simd_json::to_owned_value(&mut bytes) {
                             Ok(json) => {
-                                if let (Some(price_str), Some(ts)) = (json["p"].as_str(), json["T"].as_f64()) {
-                                    // Parse price (fixed point)
+                                // Combined streams wrap data in {"stream": "...", "data": {...}}
+                                let data = if json.get("data").is_some() {
+                                    &json["data"]
+                                } else {
+                                    &json
+                                };
+                                
+                                // Get symbol from the trade data (s field)
+                                let symbol_id = get_symbol_id(data["s"].as_str());
+                                
+                                if let (Some(symbol), Some(price_str), Some(ts)) = (symbol_id, data["p"].as_str(), data["T"].as_f64()) {
                                     if let Ok(price_f) = price_str.parse::<f64>() {
                                         let price = (price_f * 100.0) as u64;
                                         let update = MarketUpdate {
-                                            symbol: 1, // BTC
+                                            symbol,
                                             price,
                                             ts: ts as u64,
                                         };
                                         
-                                        // Push to Ring Buffer
                                         if let Err(e) = producer.push(update) {
                                             eprintln!("Ring Buffer Full! Dropping update: {:?}", e);
                                         }
                                     }
-                                } else {
-                                    // Fallback if T is not f64 (maybe i64/u64?)
-                                    if let (Some(price_str), Some(ts)) = (json["p"].as_str(), json["T"].as_u64()) {
-                                         if let Ok(price_f) = price_str.parse::<f64>() {
-                                            let price = (price_f * 100.0) as u64;
-                                            let update = MarketUpdate {
-                                                symbol: 1, // BTC
-                                                price,
-                                                ts,
-                                            };
-                                            producer.push(update).ok();
-                                         }
+                                } else if let (Some(symbol), Some(price_str), Some(ts)) = (symbol_id, data["p"].as_str(), data["T"].as_u64()) {
+                                    // Fallback if T is u64
+                                    if let Ok(price_f) = price_str.parse::<f64>() {
+                                        let price = (price_f * 100.0) as u64;
+                                        let update = MarketUpdate {
+                                            symbol,
+                                            price,
+                                            ts,
+                                        };
+                                        producer.push(update).ok();
                                     }
                                 }
                             }
