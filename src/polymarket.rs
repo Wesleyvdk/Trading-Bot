@@ -95,6 +95,32 @@ pub struct GammaEvent {
     pub closed: bool,
 }
 
+/// Gamma API market response for auto-discovery
+#[derive(Deserialize, Debug)]
+pub struct GammaMarket {
+    #[serde(default)]
+    pub id: String,
+    pub slug: String,
+    pub question: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(rename = "conditionId")]
+    pub condition_id: Option<String>,
+    #[serde(rename = "questionID")]
+    pub question_id: Option<String>,
+    #[serde(rename = "clobTokenIds")]
+    pub clob_token_ids: Option<String>,
+    pub outcomes: Option<String>,
+    #[serde(rename = "endDate")]
+    pub end_date: Option<String>,
+    #[serde(rename = "orderMinSize")]
+    pub order_min_size: Option<f64>,
+    #[serde(rename = "orderPriceMinTickSize")]
+    pub order_price_min_tick_size: Option<f64>,
+}
+
 /// Order to be signed and submitted
 #[derive(Debug, Clone)]
 pub struct Order {
@@ -260,82 +286,85 @@ impl PolymarketClient {
     pub async fn fetch_crypto_markets(&self, asset: &str) -> Result<Vec<Market>, String> {
         println!("[POLY] Auto-discovering {} crypto markets...", asset);
         
-        // First, try to find events with the asset name and "up or down" pattern
-        let search_patterns = vec![
-            format!("{}-up-or-down", asset.to_lowercase()),
-            format!("{}-price", asset.to_lowercase()),
-        ];
+        // Search gamma-api markets for up-or-down crypto markets
+        let asset_lower = asset.to_lowercase();
+        let search_url = format!(
+            "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=50"
+        );
         
-        for pattern in &search_patterns {
-            let search_url = format!(
-                "https://gamma-api.polymarket.com/events?closed=false&active=true&limit=20&slug_contains={}",
-                pattern
-            );
+        println!("[POLY] Searching gamma-api markets...");
+        
+        let response = self.client
+            .get(&search_url)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {:?}", e))?;
+        
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(format!("Gamma API error {}: {}", status, text));
+        }
+        
+        let text = response.text().await
+            .map_err(|e| format!("Failed to read response: {:?}", e))?;
+        
+        // Parse gamma-api markets and filter for crypto up/down markets
+        if let Ok(gamma_markets) = serde_json::from_str::<Vec<GammaMarket>>(&text) {
+            let mut markets: Vec<Market> = Vec::new();
             
-            println!("[POLY] Searching: {}", search_url);
-            
-            if let Ok(response) = self.client.get(&search_url).send().await {
-                if response.status().is_success() {
-                    if let Ok(text) = response.text().await {
-                        // Parse events and extract markets
-                        if let Ok(events) = serde_json::from_str::<Vec<GammaEvent>>(&text) {
-                            for event in &events {
-                                // Look for hourly/daily up-or-down events
-                                if event.slug.to_lowercase().contains("up-or-down") {
-                                    println!("[POLY] Found event: {} ({})", event.title, event.slug);
-                                    
-                                    // Fetch markets for this event from CLOB
-                                    if let Ok(markets) = self.fetch_markets_for_event(&event.slug).await {
-                                        if !markets.is_empty() {
-                                            println!("[POLY] ✅ Found {} markets for {}", markets.len(), event.title);
-                                            return Ok(markets);
-                                        }
-                                    }
-                                }
+            for gm in gamma_markets {
+                // Check if this is a crypto up/down market for our asset
+                let question_lower = gm.question.to_lowercase();
+                let slug_lower = gm.slug.to_lowercase();
+                
+                let is_crypto_market = (question_lower.contains(&asset_lower) || 
+                                        slug_lower.contains(&asset_lower)) &&
+                                       (slug_lower.contains("up-or-down") || 
+                                        question_lower.contains("up or down"));
+                
+                if is_crypto_market && gm.active && !gm.closed {
+                    println!("[POLY] Found: {} ({})", gm.question, gm.slug);
+                    
+                    // Parse the clobTokenIds and outcomes
+                    if let (Some(token_ids_str), Some(outcomes_str)) = (&gm.clob_token_ids, &gm.outcomes) {
+                        // Parse JSON arrays
+                        if let (Ok(token_ids), Ok(outcomes)) = (
+                            serde_json::from_str::<Vec<String>>(token_ids_str),
+                            serde_json::from_str::<Vec<String>>(outcomes_str)
+                        ) {
+                            if token_ids.len() >= 2 && outcomes.len() >= 2 {
+                                // Build tokens from the parsed data
+                                let tokens: Vec<Token> = token_ids.iter().zip(outcomes.iter())
+                                    .map(|(id, outcome)| Token {
+                                        token_id: id.clone(),
+                                        outcome: outcome.clone(),
+                                        price: None,
+                                    }).collect();
+                                
+                                let market = Market {
+                                    condition_id: gm.condition_id.unwrap_or_default(),
+                                    question_id: gm.question_id.clone(),
+                                    tokens,
+                                    question: Some(gm.question.clone()),
+                                    active: gm.active,
+                                    closed: gm.closed,
+                                    neg_risk: None,
+                                    minimum_tick_size: gm.order_price_min_tick_size,
+                                };
+                                
+                                markets.push(market);
                             }
                         }
                     }
                 }
             }
-        }
-        
-        // Fallback: Try CLOB API directly with different approaches
-        let clob_url = format!("{}/markets?active=true", self.base_url);
-        println!("[POLY] Fallback: Fetching from CLOB API...");
-        
-        let response = self.client
-            .get(&clob_url)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {:?}", e))?;
             
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(format!("API error {}: {}", status, text));
+            println!("[POLY] Found {} {} crypto markets", markets.len(), asset);
+            return Ok(markets);
         }
         
-        // CLOB API returns {"data": [...]} wrapper
-        let markets_response: MarketsResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse markets: {:?}", e))?;
-        
-        // Filter for crypto markets with Up/Down outcomes
-        let crypto_markets: Vec<Market> = markets_response.data.into_iter()
-            .filter(|m| {
-                let has_up_down = m.tokens.iter().any(|t| 
-                    t.outcome.eq_ignore_ascii_case("Up") || t.outcome.eq_ignore_ascii_case("Down")
-                );
-                let question_matches = m.question.as_ref()
-                    .map(|q| q.to_lowercase().contains(&asset.to_lowercase()))
-                    .unwrap_or(false);
-                has_up_down && question_matches
-            })
-            .collect();
-        
-        println!("[POLY] Found {} {} crypto markets", crypto_markets.len(), asset);
-        Ok(crypto_markets)
+        Err("Failed to parse gamma-api response".to_string())
     }
     
     /// Fetch markets for a specific event slug
