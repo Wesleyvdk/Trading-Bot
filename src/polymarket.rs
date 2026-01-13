@@ -259,6 +259,7 @@ impl PolymarketClient {
     
     pub fn new(api_key: String, api_secret: String, passphrase: String, signer: PrivateKeySigner, funder: String) -> Self {
         let client = ClientBuilder::new()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .tcp_nodelay(true)
             .timeout(std::time::Duration::from_secs(10))
             .build()
