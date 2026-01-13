@@ -401,6 +401,14 @@ impl PolymarketClient {
     pub fn new(api_key: String, api_secret: String, passphrase: String, signer: PrivateKeySigner, funder: String) -> Self {
         let client = ClientBuilder::new()
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .default_headers({
+                let mut headers = header::HeaderMap::new();
+                headers.insert("Accept", "application/json, text/plain, */*".parse().unwrap());
+                headers.insert("Accept-Language", "en-US,en;q=0.9".parse().unwrap());
+                headers.insert("Referer", "https://polymarket.com/".parse().unwrap());
+                headers.insert("Origin", "https://polymarket.com".parse().unwrap());
+                headers
+            })
             .tcp_nodelay(true)
             .timeout(std::time::Duration::from_secs(10))
             .build()
@@ -760,10 +768,10 @@ impl PolymarketClient {
         let response = self.client
             .post(&url)
             .header(header::CONTENT_TYPE, "application/json")
-            .header("POLY_API_KEY", &headers.key)
-            .header("POLY_SIGNATURE", &headers.sign)
-            .header("POLY_TIMESTAMP", &headers.timestamp)
-            .header("POLY_PASSPHRASE", &headers.passphrase)
+            .header("POLY-API-KEY", &headers.key)
+            .header("POLY-SIGNATURE", &headers.sign)
+            .header("POLY-TIMESTAMP", &headers.timestamp)
+            .header("POLY-PASSPHRASE", &headers.passphrase)
             .body(body)
             .send()
             .await
