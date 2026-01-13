@@ -133,25 +133,72 @@ pub struct OrderResponse {
 impl PolymarketClient {
     /// Create a new client from environment variables
     pub fn from_env() -> Option<Self> {
-        let api_key = std::env::var("POLYMARKET_API_KEY").ok()?;
-        let api_secret = std::env::var("POLYMARKET_API_SECRET").ok()?;
-        let passphrase = std::env::var("POLYMARKET_PASSPHRASE").ok()?;
-        let private_key = std::env::var("POLYMARKET_PRIVATE_KEY").ok()?;
+        let api_key = match std::env::var("POLYMARKET_API_KEY") {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                eprintln!("❌ POLYMARKET_API_KEY is set but empty");
+                return None;
+            }
+            Err(_) => {
+                eprintln!("❌ POLYMARKET_API_KEY is not set");
+                return None;
+            }
+        };
+        
+        let api_secret = match std::env::var("POLYMARKET_API_SECRET") {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                eprintln!("❌ POLYMARKET_API_SECRET is set but empty");
+                return None;
+            }
+            Err(_) => {
+                eprintln!("❌ POLYMARKET_API_SECRET is not set");
+                return None;
+            }
+        };
+        
+        let passphrase = match std::env::var("POLYMARKET_PASSPHRASE") {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                eprintln!("❌ POLYMARKET_PASSPHRASE is set but empty");
+                return None;
+            }
+            Err(_) => {
+                eprintln!("❌ POLYMARKET_PASSPHRASE is not set");
+                return None;
+            }
+        };
+        
+        let private_key = match std::env::var("POLYMARKET_PRIVATE_KEY") {
+            Ok(v) if !v.is_empty() => v,
+            Ok(_) => {
+                eprintln!("❌ POLYMARKET_PRIVATE_KEY is set but empty");
+                return None;
+            }
+            Err(_) => {
+                eprintln!("❌ POLYMARKET_PRIVATE_KEY is not set");
+                return None;
+            }
+        };
+        
         let funder = std::env::var("POLYMARKET_FUNDER").unwrap_or_default();
         
-        if api_key.is_empty() || api_secret.is_empty() || passphrase.is_empty() || private_key.is_empty() {
-            return None;
-        }
+        let signer = match PrivateKeySigner::from_str(&private_key) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("❌ Invalid POLYMARKET_PRIVATE_KEY: {:?}", e);
+                return None;
+            }
+        };
         
-        let signer = PrivateKeySigner::from_str(&private_key).ok()?;
-        
+        println!("✅ Polymarket API credentials loaded");
         Some(Self::new(api_key, api_secret, passphrase, signer, funder))
     }
     
     pub fn new(api_key: String, api_secret: String, passphrase: String, signer: PrivateKeySigner, funder: String) -> Self {
         let client = ClientBuilder::new()
-            .http2_prior_knowledge()
             .tcp_nodelay(true)
+            .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("Failed to build HTTP client");
 
