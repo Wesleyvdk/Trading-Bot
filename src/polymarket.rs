@@ -82,6 +82,19 @@ pub struct Token {
     pub price: Option<f64>,
 }
 
+/// Gamma API event response for auto-discovery
+#[derive(Deserialize, Debug)]
+pub struct GammaEvent {
+    #[serde(default)]
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub closed: bool,
+}
+
 /// Order to be signed and submitted
 #[derive(Debug, Clone)]
 pub struct Order {
@@ -243,16 +256,60 @@ impl PolymarketClient {
         }
     }
     
-    /// Fetch active crypto hourly markets
+    /// Fetch active crypto hourly markets using gamma-api auto-discovery
     pub async fn fetch_crypto_markets(&self, asset: &str) -> Result<Vec<Market>, String> {
-        let tag = format!("crypto-hourly-{}", asset.to_lowercase());
-        let path = "/markets";
-        let url = format!("{}{}?tag={}&active=true&closed=false", self.base_url, path, tag);
+        // Try gamma-api for better crypto market discovery
+        let gamma_url = format!(
+            "https://gamma-api.polymarket.com/events?closed=false&active=true&limit=50"
+        );
         
-        println!("[POLY] Fetching markets: {}", url);
+        println!("[POLY] Auto-discovering {} crypto markets...", asset);
+        
+        // First, try to find events with the asset name and "up or down" pattern
+        let search_patterns = vec![
+            format!("{}-up-or-down", asset.to_lowercase()),
+            format!("{}-price", asset.to_lowercase()),
+        ];
+        
+        for pattern in &search_patterns {
+            let search_url = format!(
+                "https://gamma-api.polymarket.com/events?closed=false&active=true&limit=20&slug_contains={}",
+                pattern
+            );
+            
+            println!("[POLY] Searching: {}", search_url);
+            
+            if let Ok(response) = self.client.get(&search_url).send().await {
+                if response.status().is_success() {
+                    if let Ok(text) = response.text().await {
+                        // Parse events and extract markets
+                        if let Ok(events) = serde_json::from_str::<Vec<GammaEvent>>(&text) {
+                            for event in &events {
+                                // Look for hourly/daily up-or-down events
+                                if event.slug.to_lowercase().contains("up-or-down") {
+                                    println!("[POLY] Found event: {} ({})", event.title, event.slug);
+                                    
+                                    // Fetch markets for this event from CLOB
+                                    if let Ok(markets) = self.fetch_markets_for_event(&event.slug).await {
+                                        if !markets.is_empty() {
+                                            println!("[POLY] ✅ Found {} markets for {}", markets.len(), event.title);
+                                            return Ok(markets);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fallback: Try CLOB API directly with different approaches
+        let clob_url = format!("{}/markets?active=true", self.base_url);
+        println!("[POLY] Fallback: Fetching from CLOB API...");
         
         let response = self.client
-            .get(&url)
+            .get(&clob_url)
             .send()
             .await
             .map_err(|e| format!("Request failed: {:?}", e))?;
@@ -263,13 +320,48 @@ impl PolymarketClient {
             return Err(format!("API error {}: {}", status, text));
         }
         
-        let markets_response: MarketsResponse = response
+        let markets: Vec<Market> = response
             .json()
             .await
             .map_err(|e| format!("Failed to parse markets: {:?}", e))?;
         
-        println!("[POLY] Found {} active {} markets", markets_response.data.len(), asset);
-        Ok(markets_response.data)
+        // Filter for crypto markets with Up/Down outcomes
+        let crypto_markets: Vec<Market> = markets.into_iter()
+            .filter(|m| {
+                let has_up_down = m.tokens.iter().any(|t| 
+                    t.outcome.eq_ignore_ascii_case("Up") || t.outcome.eq_ignore_ascii_case("Down")
+                );
+                let question_matches = m.question.as_ref()
+                    .map(|q| q.to_lowercase().contains(&asset.to_lowercase()))
+                    .unwrap_or(false);
+                has_up_down && question_matches
+            })
+            .collect();
+        
+        println!("[POLY] Found {} {} crypto markets", crypto_markets.len(), asset);
+        Ok(crypto_markets)
+    }
+    
+    /// Fetch markets for a specific event slug
+    async fn fetch_markets_for_event(&self, event_slug: &str) -> Result<Vec<Market>, String> {
+        let url = format!("{}/markets?event_slug={}", self.base_url, event_slug);
+        
+        let response = self.client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {:?}", e))?;
+            
+        if !response.status().is_success() {
+            return Err(format!("Event markets fetch failed"));
+        }
+        
+        let markets: Vec<Market> = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse: {:?}", e))?;
+        
+        Ok(markets)
     }
     
     /// Get wallet address as string
