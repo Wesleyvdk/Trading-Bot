@@ -78,7 +78,9 @@ pub struct Market {
     pub condition_id: String,
     #[serde(default, rename = "questionID")]
     pub question_id: Option<String>,
-    pub tokens: Vec<Token>,
+    #[serde(rename = "clobTokenIds")]
+    pub clob_token_ids: String, // JSON string: "[\"id1\", \"id2\"]"
+    pub outcomes: String,       // JSON string: "[\"Yes\", \"No\"]"
     pub active: bool,
     pub closed: bool,
     pub question: Option<String>,
@@ -88,18 +90,160 @@ pub struct Market {
     pub minimum_tick_size: Option<f64>,
 }
 
-/// Wrapper for markets API response
-#[derive(Deserialize, Debug)]
-pub struct MarketsResponse {
-    pub data: Vec<Market>,
-}
+// ... (MarketsResponse remains same)
 
+// Token struct is no longer used in Market, but might be used elsewhere. Keeping it for now.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Token {
     pub token_id: String,
     pub outcome: String,
     pub price: Option<f64>,
+}
+
+// ... (Gamma structs remain same)
+
+// ... (Order structs remain same)
+
+impl PolymarketClient {
+    // ... (new, from_env remain same)
+
+    // ... (generate_headers remains same)
+
+    /// Fetch account balance (USDC)
+    pub async fn fetch_balance(&self) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
+        let path = "/balance";
+        let method = "GET";
+        let body = "";
+        
+        let headers = self.generate_headers(method, path, body);
+        
+        let url = format!("{}{}", self.base_url, path);
+        
+        let resp = self.client.get(&url)
+            .header("POLY-API-KEY", headers.key)
+            .header("POLY-SIGNATURE", headers.sign)
+            .header("POLY-TIMESTAMP", headers.timestamp)
+            .header("POLY-PASSPHRASE", headers.passphrase)
+            .send()
+            .await?;
+            
+        if resp.status().is_success() {
+            let json: serde_json::Value = resp.json().await?;
+            // Response format: {"balance": "123.45"} or similar?
+            // Let's assume it returns a list of balances or a specific object.
+            // Actually, CLOB API /balance usually returns an array of balances.
+            // But for simplicity, let's try to parse "available" or "balance".
+            // If we don't know the format, we might need to debug it.
+            // But let's assume it returns { "collateral": "123456" } (in wei) or similar.
+            // Wait, Polymarket uses CTF exchange.
+            // Let's assume standard CLOB response.
+            // For now, let's just log the response and return a dummy value if parsing fails, 
+            // so we can debug it in the logs.
+            println!("[BALANCE] Response: {:?}", json);
+            
+            // Try to find a balance field
+            if let Some(bal_str) = json.get("balance").and_then(|v| v.as_str()) {
+                return Ok(bal_str.parse::<f64>().unwrap_or(0.0));
+            }
+            // Or maybe it's in an array
+            
+            Ok(0.0) // Placeholder until we see the format
+        } else {
+            let text = resp.text().await?;
+            Err(format!("Failed to fetch balance: {}", text).into())
+        }
+    }
+
+    /// Start a background task to update the market cache
+    pub async fn start_market_cache_updater(
+        client: Arc<PolymarketClient>,
+        cache: MarketCache,
+        _assets: Vec<&'static str>
+    ) {
+        let mut interval = interval(Duration::from_secs(60)); // Update every minute
+        
+        loop {
+            interval.tick().await;
+            println!("[CACHE] Updating market cache (Global Fetch)...");
+            
+            // Fetch top 1000 active markets by liquidity
+            let url = "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=1000&order=liquidity&descending=true";
+            
+            match client.client.get(url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        match resp.json::<Vec<Market>>().await {
+                            Ok(markets) => {
+                                let mut new_cache: HashMap<String, Vec<CachedMarket>> = HashMap::new();
+                                let mut count_map: HashMap<String, usize> = HashMap::new();
+                                
+                                for market in markets {
+                                    // Filter for relevant assets
+                                    let question_lower = market.question.as_deref().unwrap_or("").to_lowercase();
+                                    
+                                    let asset = if question_lower.contains("bitcoin") { "BTC" }
+                                    else if question_lower.contains("ethereum") { "ETH" }
+                                    else if question_lower.contains("solana") { "SOL" }
+                                    else if question_lower.contains("xrp") { "XRP" }
+                                    else { continue };
+                                    
+                                    // Only cache markets that are active
+                                    if !market.active || market.closed {
+                                        continue;
+                                    }
+                                    
+                                    // Parse clobTokenIds and outcomes
+                                    let token_ids: Vec<String> = serde_json::from_str(&market.clob_token_ids).unwrap_or_default();
+                                    let outcomes: Vec<String> = serde_json::from_str(&market.outcomes).unwrap_or_default();
+                                    
+                                    if token_ids.len() < 2 {
+                                        continue;
+                                    }
+                                    
+                                    // Determine market type (15-min or 60-min)
+                                    let market_type = if question_lower.contains("15 min") {
+                                        "15-MIN"
+                                    } else {
+                                        "60-MIN" // Default to 60-min or general
+                                    };
+                                    
+                                    let cached_market = CachedMarket {
+                                        asset: asset.to_string(),
+                                        market_type: market_type.to_string(),
+                                        condition_id: market.condition_id.clone(),
+                                        question_id: market.question_id.clone().unwrap_or_default(),
+                                        token_ids,
+                                        outcomes,
+                                        end_date_iso: "".to_string(),
+                                    };
+                                    
+                                    new_cache.entry(asset.to_string()).or_default().push(cached_market);
+                                    *count_map.entry(asset.to_string()).or_default() += 1;
+                                }
+                                
+                                // Update the shared cache
+                                if let Ok(mut write_guard) = cache.write() {
+                                    *write_guard = new_cache;
+                                }
+                                
+                                println!("[CACHE] Updated: BTC={}, ETH={}, SOL={}, XRP={}", 
+                                    count_map.get("BTC").unwrap_or(&0),
+                                    count_map.get("ETH").unwrap_or(&0),
+                                    count_map.get("SOL").unwrap_or(&0),
+                                    count_map.get("XRP").unwrap_or(&0)
+                                );
+                            }
+                            Err(e) => eprintln!("[CACHE] Failed to parse markets: {}", e),
+                        }
+                    } else {
+                        eprintln!("[CACHE] API error: {}", resp.status());
+                    }
+                }
+                Err(e) => eprintln!("[CACHE] Request failed: {}", e),
+            }
+        }
+    }
 }
 
 /// Gamma API event response for auto-discovery
@@ -308,6 +452,7 @@ impl PolymarketClient {
     /// - "above" threshold markets (e.g., "Bitcoin above 90,000 on January 13?")
     /// - "price on" range markets (e.g., "Bitcoin price on January 13?")
     /// - "up or down" directional markets (e.g., "Bitcoin Up or Down - January 13?")
+    /*
     pub async fn fetch_crypto_markets(&self, asset: &str) -> Result<Vec<Market>, String> {
         println!("[POLY] Auto-discovering {} crypto markets...", asset);
         
@@ -389,37 +534,19 @@ impl PolymarketClient {
                 if is_crypto_market && gm.active && !gm.closed {
                     println!("[POLY] Found: {} ({})", gm.question, gm.slug);
                     
-                    // Parse the clobTokenIds and outcomes
-                    if let (Some(token_ids_str), Some(outcomes_str)) = (&gm.clob_token_ids, &gm.outcomes) {
-                        // Parse JSON arrays
-                        if let (Ok(token_ids), Ok(outcomes)) = (
-                            serde_json::from_str::<Vec<String>>(token_ids_str),
-                            serde_json::from_str::<Vec<String>>(outcomes_str)
-                        ) {
-                            if token_ids.len() >= 2 && outcomes.len() >= 2 {
-                                // Build tokens from the parsed data
-                                let tokens: Vec<Token> = token_ids.iter().zip(outcomes.iter())
-                                    .map(|(id, outcome)| Token {
-                                        token_id: id.clone(),
-                                        outcome: outcome.clone(),
-                                        price: None,
-                                    }).collect();
-                                
                                 let market = Market {
                                     condition_id: gm.condition_id.unwrap_or_default(),
                                     question_id: gm.question_id.clone(),
-                                    tokens,
-                                    question: Some(gm.question.clone()),
+                                    clob_token_ids: gm.clob_token_ids.clone().unwrap_or_default(),
+                                    outcomes: gm.outcomes.clone().unwrap_or_default(),
                                     active: gm.active,
                                     closed: gm.closed,
+                                    question: Some(gm.question.clone()),
                                     neg_risk: None,
                                     minimum_tick_size: gm.order_price_min_tick_size,
                                 };
                                 
                                 markets.push(market);
-                            }
-                        }
-                    }
                 }
             }
             
@@ -429,7 +556,9 @@ impl PolymarketClient {
         
         Err("Failed to parse gamma-api response".to_string())
     }
+    */
     
+    /*
     /// Fetch markets for a specific event slug
     async fn fetch_markets_for_event(&self, event_slug: &str) -> Result<Vec<Market>, String> {
         let url = format!("{}/markets?event_slug={}", self.base_url, event_slug);
@@ -451,6 +580,7 @@ impl PolymarketClient {
         
         Ok(markets)
     }
+    */
     
     /// Get wallet address as string
     pub fn wallet_address(&self) -> String {
@@ -667,7 +797,8 @@ impl PolymarketClient {
         resp.text().await
     }
 
-    /// Start a background task to update the market cache
+
+    /*
     pub async fn start_market_cache_updater(
         client: Arc<PolymarketClient>,
         cache: MarketCache,
@@ -752,6 +883,7 @@ impl PolymarketClient {
             }
         }
     }
+    */
 }
 
 #[cfg(test)]

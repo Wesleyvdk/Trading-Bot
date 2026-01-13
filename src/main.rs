@@ -47,6 +47,20 @@ async fn main() {
                 println!("✅ Polymarket API client initialized");
                 let client_arc = Arc::new(client);
                 
+                // Fetch Initial Balance
+                let client_clone_bal = client_arc.clone();
+                let risk_clone_bal = risk_manager.clone();
+                tokio::spawn(async move {
+                    match client_clone_bal.fetch_balance().await {
+                        Ok(balance) => {
+                            println!("💰 Initial Balance: ${:.2}", balance);
+                            // Update risk manager (we need a method for this, or just log it for now)
+                            // risk_clone_bal.update_balance(balance); // TODO: Implement update_balance
+                        }
+                        Err(e) => eprintln!("❌ Failed to fetch initial balance: {}", e),
+                    }
+                });
+                
                 // Spawn Market Cache Updater
                 let cache_clone = market_cache.clone();
                 let client_clone = client_arc.clone();
@@ -54,7 +68,7 @@ async fn main() {
                     PolymarketClient::start_market_cache_updater(
                         client_clone, 
                         cache_clone, 
-                        vec!["BTC", "ETH", "SOL", "XRP"]
+                        vec![] // Assets hardcoded in updater
                     ).await;
                 });
                 
