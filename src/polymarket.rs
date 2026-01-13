@@ -72,9 +72,11 @@ pub struct L2Header {
 
 /// Market data from Polymarket API
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Market {
+    #[serde(rename = "conditionId")]
     pub condition_id: String,
-    #[serde(default)]
+    #[serde(default, rename = "questionID")]
     pub question_id: Option<String>,
     pub tokens: Vec<Token>,
     pub active: bool,
@@ -93,6 +95,7 @@ pub struct MarketsResponse {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Token {
     pub token_id: String,
     pub outcome: String,
