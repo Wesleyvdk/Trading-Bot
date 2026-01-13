@@ -26,6 +26,7 @@ dotenv = "0.15"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "bigdecimal"] }
 bigdecimal = "0.4"
 urlencoding = "2.1.3"
+polymarket-rs = "0.2.0"
 
 [profile.release]
 lto = "fat"
