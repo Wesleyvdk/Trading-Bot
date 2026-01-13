@@ -66,7 +66,7 @@ pub struct Market {
     #[serde(default)]
     pub neg_risk: Option<bool>,
     #[serde(default)]
-    pub minimum_tick_size: Option<String>,
+    pub minimum_tick_size: Option<f64>,
 }
 
 /// Wrapper for markets API response
@@ -93,7 +93,7 @@ pub struct Order {
     pub nonce: u64,
     pub expiration: u64,
     pub neg_risk: bool,
-    pub tick_size: String,
+    pub tick_size: f64,
 }
 
 /// Order request payload for CLOB API

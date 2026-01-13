@@ -139,7 +139,7 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
                                         nonce: trade_count,
                                         expiration: 0, // No expiration
                                         neg_risk: market.neg_risk.unwrap_or(false),
-                                        tick_size: market.minimum_tick_size.clone().unwrap_or("0.001".to_string()),
+                                        tick_size: market.minimum_tick_size.unwrap_or(0.001),
                                     };
                                     
                                     println!(" Status:   ⏳ SIGNING ORDER...");
