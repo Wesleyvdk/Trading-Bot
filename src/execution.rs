@@ -127,7 +127,7 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
                             if let Some(market) = crypto_market {
                                 // Debug: show what we found
                                 let outcomes: Vec<&str> = market.tokens.iter().map(|t| t.outcome.as_str()).collect();
-                                println!(" Market:   {:?}", market.question.as_deref().unwrap_or("unknown")[..50.min(market.question.as_deref().unwrap_or("").len())]);
+                                println!(" Market:   {:?}", market.question.as_deref().unwrap_or("unknown").chars().take(60).collect::<String>());
                                 println!(" Outcomes: {:?}", outcomes);
                                 
                                 // Find the correct token - crypto hourly uses "Up"/"Down" outcomes
