@@ -337,54 +337,40 @@ impl PolymarketClient {
     /// Create a new client from environment variables
     pub fn from_env() -> Option<Self> {
         let api_key = match std::env::var("POLYMARKET_API_KEY") {
-            Ok(v) if !v.is_empty() => v,
-            Ok(_) => {
-                eprintln!("❌ POLYMARKET_API_KEY is set but empty");
-                return None;
-            }
-            Err(_) => {
-                eprintln!("❌ POLYMARKET_API_KEY is not set");
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => {
+                eprintln!("❌ POLYMARKET_API_KEY is missing or empty");
                 return None;
             }
         };
         
         let api_secret = match std::env::var("POLYMARKET_API_SECRET") {
-            Ok(v) if !v.is_empty() => v,
-            Ok(_) => {
-                eprintln!("❌ POLYMARKET_API_SECRET is set but empty");
-                return None;
-            }
-            Err(_) => {
-                eprintln!("❌ POLYMARKET_API_SECRET is not set");
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => {
+                eprintln!("❌ POLYMARKET_API_SECRET is missing or empty");
                 return None;
             }
         };
         
         let passphrase = match std::env::var("POLYMARKET_PASSPHRASE") {
-            Ok(v) if !v.is_empty() => v,
-            Ok(_) => {
-                eprintln!("❌ POLYMARKET_PASSPHRASE is set but empty");
-                return None;
-            }
-            Err(_) => {
-                eprintln!("❌ POLYMARKET_PASSPHRASE is not set");
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => {
+                eprintln!("❌ POLYMARKET_PASSPHRASE is missing or empty");
                 return None;
             }
         };
         
         let private_key = match std::env::var("POLYMARKET_PRIVATE_KEY") {
-            Ok(v) if !v.is_empty() => v,
-            Ok(_) => {
-                eprintln!("❌ POLYMARKET_PRIVATE_KEY is set but empty");
-                return None;
-            }
-            Err(_) => {
-                eprintln!("❌ POLYMARKET_PRIVATE_KEY is not set");
+            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            _ => {
+                eprintln!("❌ POLYMARKET_PRIVATE_KEY is missing or empty");
                 return None;
             }
         };
         
-        let funder = std::env::var("POLYMARKET_FUNDER").unwrap_or_default();
+        let funder = std::env::var("POLYMARKET_FUNDER")
+            .map(|v| v.trim().to_string())
+            .unwrap_or_else(|_| "0x0000000000000000000000000000000000000000".to_string());
         
         let signer = match PrivateKeySigner::from_str(&private_key) {
             Ok(s) => s,
@@ -409,6 +395,7 @@ impl PolymarketClient {
                 headers.insert("Origin", "https://polymarket.com".parse().unwrap());
                 headers
             })
+            .cookie_store(true)
             .tcp_nodelay(true)
             .timeout(std::time::Duration::from_secs(10))
             .build()

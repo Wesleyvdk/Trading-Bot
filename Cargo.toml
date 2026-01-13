@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.36", features = ["full"] }
 tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2", "cookies"] }
 alloy = { version = "0.1", features = ["full"] }
 simd-json = "0.13"
 rtrb = "0.3"
