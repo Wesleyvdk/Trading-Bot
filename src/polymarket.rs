@@ -112,7 +112,7 @@ impl PolymarketClient {
 
     /// Fetch account balance (USDC)
     pub async fn fetch_balance(&self) -> Result<f64, Box<dyn std::error::Error + Send + Sync>> {
-        let path = "/balance";
+        let path = "/balance-allowance?asset_type=COLLATERAL";
         let method = "GET";
         let body = "";
         
@@ -130,28 +130,22 @@ impl PolymarketClient {
             
         if resp.status().is_success() {
             let json: serde_json::Value = resp.json().await?;
-            // Response format: {"balance": "123.45"} or similar?
-            // Let's assume it returns a list of balances or a specific object.
-            // Actually, CLOB API /balance usually returns an array of balances.
-            // But for simplicity, let's try to parse "available" or "balance".
-            // If we don't know the format, we might need to debug it.
-            // But let's assume it returns { "collateral": "123456" } (in wei) or similar.
-            // Wait, Polymarket uses CTF exchange.
-            // Let's assume standard CLOB response.
-            // For now, let's just log the response and return a dummy value if parsing fails, 
-            // so we can debug it in the logs.
             println!("[BALANCE] Response: {:?}", json);
             
             // Try to find a balance field
             if let Some(bal_str) = json.get("balance").and_then(|v| v.as_str()) {
                 return Ok(bal_str.parse::<f64>().unwrap_or(0.0));
             }
-            // Or maybe it's in an array
+            // Handle numeric balance if API returns number instead of string
+            if let Some(bal_f64) = json.get("balance").and_then(|v| v.as_f64()) {
+                return Ok(bal_f64);
+            }
             
             Ok(0.0) // Placeholder until we see the format
         } else {
+            let status = resp.status();
             let text = resp.text().await?;
-            Err(format!("Failed to fetch balance: {}", text).into())
+            Err(format!("Failed to fetch balance: {} - {}", status, text).into())
         }
     }
 
