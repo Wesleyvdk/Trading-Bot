@@ -8,8 +8,25 @@ use alloy::signers::Signer;
 use alloy::signers::local::PrivateKeySigner;
 use alloy::primitives::{keccak256, Address, U256, B256};
 use std::str::FromStr;
+use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use tokio::time::{interval, Duration};
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Cached market data for strategy and execution
+#[derive(Debug, Clone)]
+pub struct CachedMarket {
+    pub asset: String,      // "BTC", "ETH", etc.
+    pub market_type: String, // "15-MIN", "60-MIN"
+    pub condition_id: String,
+    pub question_id: String,
+    pub token_ids: Vec<String>, // [YES_ID, NO_ID]
+    pub outcomes: Vec<String>,  // ["Up", "Down"]
+    pub end_date_iso: String,   // ISO timestamp for expiry
+}
+
+pub type MarketCache = Arc<RwLock<HashMap<String, Vec<CachedMarket>>>>;
 
 /// CTF Exchange contract address on Polygon mainnet
 const CTF_EXCHANGE: &str = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E";
@@ -644,6 +661,66 @@ impl PolymarketClient {
         let url = format!("{}/time", self.base_url);
         let resp = self.client.get(&url).send().await?;
         resp.text().await
+    }
+
+    /// Start a background task to update the market cache
+    pub async fn start_market_cache_updater(
+        client: Arc<PolymarketClient>,
+        cache: MarketCache,
+        assets: Vec<&'static str>
+    ) {
+        let mut interval = interval(Duration::from_secs(60)); // Update every minute
+        
+        loop {
+            interval.tick().await;
+            println!("[CACHE] Updating market cache for {:?}...", assets);
+            
+            for &asset in &assets {
+                match client.fetch_crypto_markets(asset).await {
+                    Ok(markets) => {
+                        let mut cached_markets = Vec::new();
+                        
+                        for market in markets {
+                            // Only cache markets that have tokens and are active
+                            if !market.active || market.closed || market.tokens.len() < 2 {
+                                continue;
+                            }
+                            
+                            // Determine market type (15-min or 60-min) based on title/slug
+                            // This is a heuristic - we might need better logic
+                            let market_type = if market.question.as_deref().unwrap_or("").to_lowercase().contains("15 min") {
+                                "15-MIN"
+                            } else {
+                                "60-MIN" // Default to 60-min or general
+                            };
+                            
+                            let outcomes: Vec<String> = market.tokens.iter().map(|t| t.outcome.clone()).collect();
+                            let token_ids: Vec<String> = market.tokens.iter().map(|t| t.token_id.clone()).collect();
+                            
+                            cached_markets.push(CachedMarket {
+                                asset: asset.to_string(),
+                                market_type: market_type.to_string(),
+                                condition_id: market.condition_id.clone(),
+                                question_id: market.question_id.clone().unwrap_or_default(),
+                                token_ids,
+                                outcomes,
+                                end_date_iso: "".to_string(), // TODO: Parse end date if needed
+                            });
+                        }
+                        
+                        // Update cache for this asset
+                        if let Ok(mut write_guard) = cache.write() {
+                            write_guard.insert(asset.to_string(), cached_markets.clone());
+                        }
+                        
+                        println!("[CACHE] Updated {} markets for {}", cached_markets.len(), asset);
+                    }
+                    Err(e) => {
+                        eprintln!("[CACHE] Failed to fetch markets for {}: {}", asset, e);
+                    }
+                }
+            }
+        }
     }
 }
 

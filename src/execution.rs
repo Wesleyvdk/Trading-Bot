@@ -9,7 +9,7 @@ use crate::database::{DbLogger, TradeLogMsg, insert_wallet_balance};
 use crate::risk::RiskManager;
 
 /// Toggle between live trading and dry run
-const LIVE_MODE: bool = true;  // 🔴 LIVE TRADING ENABLED
+pub const LIVE_MODE: bool = true;  // 🔴 LIVE TRADING ENABLED
 
 pub struct TradeInstruction {
     pub symbol: u64,    // 15 = 15-min market, 60 = 60-min market
@@ -18,7 +18,14 @@ pub struct TradeInstruction {
     pub size: u64,
 }
 
-pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: Arc<DbLogger>, db_pool: PgPool, risk_manager: Arc<RiskManager>) {
+pub async fn run_execution(
+    mut consumer: Consumer<TradeInstruction>, 
+    db_logger: Arc<DbLogger>, 
+    db_pool: PgPool, 
+    risk_manager: Arc<RiskManager>,
+    poly_client: Option<Arc<PolymarketClient>>,
+    market_cache: crate::polymarket::MarketCache
+) {
     println!("Starting Execution Engine...");
     println!("Mode: {}", if LIVE_MODE { "🔴 LIVE TRADING" } else { "🟢 DRY RUN" });
     println!("Risk Tier: {} | Trade Size: ${}", risk_manager.current_tier().name(), risk_manager.get_trade_size());
@@ -36,23 +43,6 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
     let wallet_address = format!("{:?}", signer.address());
 
     println!("Signer Address: {}", wallet_address);
-
-    // Initialize Polymarket Client (if in live mode)
-    let poly_client = if LIVE_MODE {
-        match PolymarketClient::from_env() {
-            Some(client) => {
-                println!("✅ Polymarket API client initialized");
-                Some(client)
-            }
-            None => {
-                eprintln!("❌ POLYMARKET_API_KEY, POLYMARKET_API_SECRET, or POLYMARKET_PASSPHRASE not set!");
-                eprintln!("   Falling back to DRY RUN mode");
-                None
-            }
-        }
-    } else {
-        None
-    };
 
     // PnL Tracking - use starting balance from risk manager
     let starting_balance = 58.36;
@@ -114,92 +104,81 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
             
             if LIVE_MODE {
                 if let Some(ref client) = poly_client {
-                    println!(" Status:   ⏳ FETCHING MARKET...");
+                    println!(" Status:   ⏳ LOOKING UP MARKET IN CACHE...");
                     
-                    // Fetch active markets for this asset
-                    match client.fetch_crypto_markets(asset_name).await {
-                        Ok(markets) => {
-                            // Find a market with Up/Down outcomes (crypto hourly specific)
-                            let crypto_market = markets.iter().find(|m| {
-                                m.tokens.iter().any(|t| t.outcome.eq_ignore_ascii_case("Up") || t.outcome.eq_ignore_ascii_case("Down"))
-                            });
+                    // Lookup market in cache
+                    let mut found_market = None;
+                    if let Ok(cache) = market_cache.read() {
+                        if let Some(markets) = cache.get(asset_name) {
+                            // Find matching market (15-min or 60-min)
+                            found_market = markets.iter().find(|m| m.market_type == market_type).cloned();
+                        }
+                    }
+                    
+                    if let Some(market) = found_market {
+                        println!(" Market:   {} ({})", market.question_id, market.condition_id);
+                        
+                        // Find the correct token ID
+                        let target_outcome = if trade.side == 0 { "Up" } else { "Down" };
+                        let token_index = market.outcomes.iter().position(|o| o.eq_ignore_ascii_case(target_outcome));
+                        
+                        if let Some(idx) = token_index {
+                            let token_id = &market.token_ids[idx];
+                            println!(" Token ID: {}...", &token_id[..20.min(token_id.len())]);
                             
-                            if let Some(market) = crypto_market {
-                                // Debug: show what we found
-                                let outcomes: Vec<&str> = market.tokens.iter().map(|t| t.outcome.as_str()).collect();
-                                println!(" Market:   {:?}", market.question.as_deref().unwrap_or("unknown").chars().take(60).collect::<String>());
-                                println!(" Outcomes: {:?}", outcomes);
-                                
-                                // Find the correct token - crypto hourly uses "Up"/"Down" outcomes
-                                let target_outcome = if trade.side == 0 { "Up" } else { "Down" };
-                                if let Some(token) = market.tokens.iter().find(|t| 
-                                    t.outcome.eq_ignore_ascii_case(target_outcome)
-                                ) {
-                                    println!(" Token ID: {}...", &token.token_id[..20.min(token.token_id.len())]);
+                            // Create the order
+                            let order = crate::polymarket::Order {
+                                token_id: token_id.clone(),
+                                price: price_f,
+                                size: size_f,
+                                side: if is_sell { 
+                                    crate::polymarket::OrderSide::SELL 
+                                } else { 
+                                    crate::polymarket::OrderSide::BUY 
+                                },
+                                fee_rate_bps: 0,
+                                nonce: trade_count,
+                                expiration: 0, // No expiration
+                                neg_risk: false, // Assuming false for now, or add to CachedMarket
+                                tick_size: 0.001, // Default tick size
+                            };
+                            
+                            println!(" Status:   ⏳ SIGNING ORDER...");
+                            
+                            // Sign and submit the order
+                            match client.create_signed_order(&order).await {
+                                Ok(signed_order) => {
+                                    println!(" Status:   ⏳ SUBMITTING TO CLOB...");
                                     
-                                    // Create the order
-                                    let order = crate::polymarket::Order {
-                                        token_id: token.token_id.clone(),
-                                        price: price_f,
-                                        size: size_f,
-                                        side: if is_sell { 
-                                            crate::polymarket::OrderSide::SELL 
-                                        } else { 
-                                            crate::polymarket::OrderSide::BUY 
-                                        },
-                                        fee_rate_bps: 0,
-                                        nonce: trade_count,
-                                        expiration: 0, // No expiration
-                                        neg_risk: market.neg_risk.unwrap_or(false),
-                                        tick_size: market.minimum_tick_size.unwrap_or(0.001),
-                                    };
-                                    
-                                    println!(" Status:   ⏳ SIGNING ORDER...");
-                                    
-                                    // Sign and submit the order
-                                    match client.create_signed_order(&order).await {
-                                        Ok(signed_order) => {
-                                            println!(" Status:   ⏳ SUBMITTING TO CLOB...");
-                                            
-                                            match client.place_order(signed_order).await {
-                                                Ok(response) => {
-                                                    if response.success {
-                                                        order_success = true;
-                                                        order_id = response.order_id.clone();
-                                                        println!(" Status:   ✅ ORDER PLACED: {}", 
-                                                            response.order_id.unwrap_or("unknown".to_string()));
-                                                        total_balance += profit;
-                                                        total_profit += profit;
-                                                    } else {
-                                                        println!(" Status:   ❌ ORDER REJECTED: {}", 
-                                                            response.error_msg.unwrap_or("unknown error".to_string()));
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    println!(" Status:   ❌ ORDER FAILED: {}", e);
-                                                }
+                                    match client.place_order(signed_order).await {
+                                        Ok(response) => {
+                                            if response.success {
+                                                order_success = true;
+                                                order_id = response.order_id.clone();
+                                                println!(" Status:   ✅ ORDER PLACED: {}", 
+                                                    response.order_id.unwrap_or("unknown".to_string()));
+                                                total_balance += profit;
+                                                total_profit += profit;
+                                            } else {
+                                                println!(" Status:   ❌ ORDER REJECTED: {}", 
+                                                    response.error_msg.unwrap_or("unknown error".to_string()));
                                             }
                                         }
                                         Err(e) => {
-                                            println!(" Status:   ❌ SIGNING FAILED: {}", e);
+                                            println!(" Status:   ❌ ORDER FAILED: {}", e);
                                         }
                                     }
-                                } else {
-                                    println!(" Status:   ❌ TOKEN NOT FOUND for outcome: {}", target_outcome);
                                 }
-                            } else {
-                                // Debug: show what the first market looks like
-                                if let Some(first) = markets.first() {
-                                    let outcomes: Vec<&str> = first.tokens.iter().map(|t| t.outcome.as_str()).collect();
-                                    println!(" Debug:    First market: {:?}", first.question.as_deref().unwrap_or("unknown").chars().take(60).collect::<String>());
-                                    println!(" Debug:    Outcomes: {:?}", outcomes);
+                                Err(e) => {
+                                    println!(" Status:   ❌ SIGNING FAILED: {}", e);
                                 }
-                                println!(" Status:   ❌ NO CRYPTO HOURLY MARKET FOUND (no Up/Down outcome)");
                             }
+                        } else {
+                            println!(" Status:   ❌ TOKEN NOT FOUND for outcome: {}", target_outcome);
                         }
-                        Err(e) => {
-                            println!(" Status:   ❌ MARKET FETCH FAILED: {}", e);
-                        }
+                    } else {
+                        println!(" Status:   ❌ NO ACTIVE MARKET FOUND IN CACHE for {} {}", asset_name, market_type);
+                        // Optional: Trigger immediate discovery if not found?
                     }
                 } else {
                     println!(" Status:   ❌ NO API CLIENT - Skipped");

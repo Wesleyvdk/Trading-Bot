@@ -49,7 +49,12 @@ struct Position {
     entry_price_cents: u64,
 }
 
-pub fn run_strategy(mut consumer: Consumer<MarketUpdate>, mut producer: Producer<TradeInstruction>, db_logger: Arc<DbLogger>) {
+pub fn run_strategy(
+    mut consumer: Consumer<MarketUpdate>, 
+    mut producer: Producer<TradeInstruction>, 
+    db_logger: Arc<DbLogger>,
+    market_cache: crate::polymarket::MarketCache
+) {
     println!("Starting Strategy Engine (Multi-Asset Mode + Stop-Loss)...");
     db_logger.log_activity("info", "system", "Strategy Engine started", Some(r#"{"mode": "multi-asset", "assets": ["BTC", "ETH", "SOL", "XRP"]}"#.to_string()));    
     // Price history for momentum calculation (per-asset rolling windows)
@@ -95,8 +100,27 @@ pub fn run_strategy(mut consumer: Consumer<MarketUpdate>, mut producer: Producer
                 perf_last_report = Instant::now();
             }
             
-            // Get price history for this asset
+            // Get asset name
             let asset_symbol = update.symbol;
+            let asset_name = get_asset_name(asset_symbol);
+            
+            // CHECK MARKET CACHE: Only process if we have an active market for this asset
+            // This avoids wasting CPU on assets with no markets (e.g. XRP if no market exists)
+            let has_active_market = if let Ok(cache) = market_cache.read() {
+                cache.get(asset_name).map(|m| !m.is_empty()).unwrap_or(false)
+            } else {
+                false // Lock failed, safe default
+            };
+            
+            // If no active market and we don't have open positions for this asset, skip
+            let has_open_positions = open_positions.iter().any(|p| p.asset_symbol == asset_symbol);
+            
+            if !has_active_market && !has_open_positions {
+                // Skip processing for this asset to save resources
+                continue;
+            }
+            
+            // Get price history for this asset
             let price_history = match price_histories.get_mut(&asset_symbol) {
                 Some(h) => h,
                 None => continue, // Unknown symbol, skip
@@ -338,7 +362,11 @@ fn calculate_momentum(history: &VecDeque<PriceSnapshot>, now_ms: u64, window_ms:
 }
 
 /// Fallback: Run strategy without database logging (multi-asset)
-pub fn run_strategy_no_db(mut consumer: Consumer<MarketUpdate>, mut producer: Producer<TradeInstruction>) {
+pub fn run_strategy_no_db(
+    mut consumer: Consumer<MarketUpdate>, 
+    mut producer: Producer<TradeInstruction>,
+    _market_cache: crate::polymarket::MarketCache
+) {
     println!("Starting Strategy Engine (NO DB MODE - Multi-Asset)...");
     
     // Price history for momentum calculation (per-asset rolling windows)

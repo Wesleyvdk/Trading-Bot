@@ -11,6 +11,7 @@ use std::thread;
 use std::sync::Arc;
 use database::{DbLogger, upsert_heartbeat};
 use risk::RiskManager;
+use polymarket::PolymarketClient;
 
 #[tokio::main]
 async fn main() {
@@ -36,6 +37,46 @@ async fn main() {
     const STARTING_BALANCE: f64 = 58.36;
     let risk_manager = Arc::new(RiskManager::new(STARTING_BALANCE));
 
+    // Initialize Market Cache (Shared between threads)
+    let market_cache: polymarket::MarketCache = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+
+    // Initialize Polymarket Client (if in live mode)
+    let poly_client = if execution::LIVE_MODE {
+        match PolymarketClient::from_env() {
+            Some(client) => {
+                println!("✅ Polymarket API client initialized");
+                let client_arc = Arc::new(client);
+                
+                // Spawn Market Cache Updater
+                let cache_clone = market_cache.clone();
+                let client_clone = client_arc.clone();
+                tokio::spawn(async move {
+                    PolymarketClient::start_market_cache_updater(
+                        client_clone, 
+                        cache_clone, 
+                        vec!["BTC", "ETH", "SOL", "XRP"]
+                    ).await;
+                });
+                
+                Some(client_arc)
+            }
+            None => {
+                eprintln!("❌ POLYMARKET_API_KEY, POLYMARKET_API_SECRET, or POLYMARKET_PASSPHRASE not set!");
+                eprintln!("   Falling back to DRY RUN mode");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // PnL Tracking - use starting balance from risk manager
+    let starting_balance = 58.36;
+    let mut total_balance: f64 = starting_balance;
+    let mut total_profit: f64 = 0.0;
+    let mut trade_count: u64 = 0;
+    let mut last_logged_balance: f64 = starting_balance;
+
     // 1. Ingestion -> Strategy Ring Buffer (Capacity 1024)
     let (ingestion_prod, strategy_cons) = RingBuffer::<ingestion::MarketUpdate>::new(1024);
 
@@ -51,8 +92,12 @@ async fn main() {
     let exec_logger = Arc::clone(&db_logger);
     let exec_pool = db_pool.clone();
     let exec_risk = Arc::clone(&risk_manager);
+    let exec_cache = market_cache.clone();
+    
+    // We need to pass the client to execution if it exists
+    // Note: execution::run_execution signature needs to change to accept client and cache
     tokio::spawn(async move {
-        execution::run_execution(execution_cons, exec_logger, exec_pool, exec_risk).await;
+        execution::run_execution(execution_cons, exec_logger, exec_pool, exec_risk, poly_client, exec_cache).await;
     });
 
     // Spawn Heartbeat Task (every 10 seconds)
@@ -77,8 +122,9 @@ async fn main() {
 
     // Run Strategy (Blocking/Pinned)
     let strategy_logger = Arc::clone(&db_logger);
+    let strategy_cache = market_cache.clone();
     thread::spawn(move || {
-        strategy::run_strategy(strategy_cons, strategy_prod, strategy_logger);
+        strategy::run_strategy(strategy_cons, strategy_prod, strategy_logger, strategy_cache);
     });
 
     // Keep main alive
@@ -101,7 +147,9 @@ async fn run_without_db() {
     });
 
     thread::spawn(move || {
-        strategy::run_strategy_no_db(strategy_cons, strategy_prod);
+        // No cache in fallback mode for now, or create empty one
+        let cache = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+        strategy::run_strategy_no_db(strategy_cons, strategy_prod, cache);
     });
 
     loop {
