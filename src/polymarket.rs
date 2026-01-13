@@ -283,16 +283,22 @@ impl PolymarketClient {
     }
     
     /// Fetch active crypto hourly markets using gamma-api auto-discovery
+    /// Searches for short-term price prediction markets including:
+    /// - "above" threshold markets (e.g., "Bitcoin above 90,000 on January 13?")
+    /// - "price on" range markets (e.g., "Bitcoin price on January 13?")
+    /// - "up or down" directional markets (e.g., "Bitcoin Up or Down - January 13?")
     pub async fn fetch_crypto_markets(&self, asset: &str) -> Result<Vec<Market>, String> {
         println!("[POLY] Auto-discovering {} crypto markets...", asset);
         
-        // Search gamma-api markets for up-or-down crypto markets
+        // Use the search parameter to filter by asset name
+        // This is more reliable than slug_contains which appears to be broken for some assets
         let asset_lower = asset.to_lowercase();
         let search_url = format!(
-            "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=50"
+            "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=100&search={}",
+            urlencoding::encode(&asset_lower)
         );
         
-        println!("[POLY] Searching gamma-api markets...");
+        println!("[POLY] Searching gamma-api markets for '{}'...", asset);
         
         let response = self.client
             .get(&search_url)
@@ -309,19 +315,39 @@ impl PolymarketClient {
         let text = response.text().await
             .map_err(|e| format!("Failed to read response: {:?}", e))?;
         
-        // Parse gamma-api markets and filter for crypto up/down markets
+        // Parse gamma-api markets and filter for crypto price prediction markets
         if let Ok(gamma_markets) = serde_json::from_str::<Vec<GammaMarket>>(&text) {
             let mut markets: Vec<Market> = Vec::new();
             
             for gm in gamma_markets {
-                // Check if this is a crypto up/down market for our asset
+                // Check if this is a crypto price prediction market for our asset
                 let question_lower = gm.question.to_lowercase();
                 let slug_lower = gm.slug.to_lowercase();
                 
-                let is_crypto_market = (question_lower.contains(&asset_lower) || 
-                                        slug_lower.contains(&asset_lower)) &&
-                                       (slug_lower.contains("up-or-down") || 
-                                        question_lower.contains("up or down"));
+                // Must contain the asset name in question or slug
+                let contains_asset = question_lower.contains(&asset_lower) || 
+                                     slug_lower.contains(&asset_lower);
+                
+                // Check for short-term price prediction patterns:
+                // 1. "above" threshold markets (e.g., "Bitcoin above ___ on January 13?")
+                // 2. "price on" range markets (e.g., "Bitcoin price on January 13?")  
+                // 3. "up or down" directional markets (e.g., "Bitcoin Up or Down - January 13?")
+                // 4. "will be above" pattern (used by Ethereum markets)
+                let is_price_market = slug_lower.contains("above") ||
+                                      question_lower.contains("above") ||
+                                      slug_lower.contains("price-on") ||
+                                      question_lower.contains("price on") ||
+                                      slug_lower.contains("up-or-down") || 
+                                      question_lower.contains("up or down") ||
+                                      slug_lower.contains("will-be-above");
+                
+                // Exclude long-term markets (monthly, yearly, "hit" markets, "what price will X hit")
+                let is_long_term = question_lower.contains("what price will") ||
+                                   question_lower.contains("hit in") ||
+                                   question_lower.contains("all time high") ||
+                                   question_lower.contains("ath");
+                
+                let is_crypto_market = contains_asset && is_price_market && !is_long_term;
                 
                 if is_crypto_market && gm.active && !gm.closed {
                     println!("[POLY] Found: {} ({})", gm.question, gm.slug);
