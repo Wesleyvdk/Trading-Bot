@@ -188,7 +188,13 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
                                     println!(" Status:   ❌ TOKEN NOT FOUND for outcome: {}", target_outcome);
                                 }
                             } else {
-                                println!(" Status:   ❌ NO ACTIVE MARKETS for {}", asset_name);
+                                // Debug: show what the first market looks like
+                                if let Some(first) = markets.first() {
+                                    let outcomes: Vec<&str> = first.tokens.iter().map(|t| t.outcome.as_str()).collect();
+                                    println!(" Debug:    First market: {:?}", first.question.as_deref().unwrap_or("unknown").chars().take(60).collect::<String>());
+                                    println!(" Debug:    Outcomes: {:?}", outcomes);
+                                }
+                                println!(" Status:   ❌ NO CRYPTO HOURLY MARKET FOUND (no Up/Down outcome)");
                             }
                         }
                         Err(e) => {
