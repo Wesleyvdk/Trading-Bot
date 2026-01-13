@@ -294,6 +294,7 @@ impl PolymarketClient {
         // This is more reliable than slug_contains which appears to be broken for some assets
         // Determine if we have a known tag ID for this asset
         // tag_id=235 is "Bitcoin" - this is much more reliable than search=bitcoin
+        let asset_lower = asset.to_lowercase();
         let tag_id = match asset_lower.as_str() {
             "btc" | "bitcoin" => Some("235"),
             _ => None,
