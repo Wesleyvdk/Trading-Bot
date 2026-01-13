@@ -69,6 +69,12 @@ pub struct Market {
     pub minimum_tick_size: Option<String>,
 }
 
+/// Wrapper for markets API response
+#[derive(Deserialize, Debug)]
+pub struct MarketsResponse {
+    pub data: Vec<Market>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Token {
     pub token_id: String,
@@ -257,13 +263,13 @@ impl PolymarketClient {
             return Err(format!("API error {}: {}", status, text));
         }
         
-        let markets: Vec<Market> = response
+        let markets_response: MarketsResponse = response
             .json()
             .await
             .map_err(|e| format!("Failed to parse markets: {:?}", e))?;
         
-        println!("[POLY] Found {} active {} markets", markets.len(), asset);
-        Ok(markets)
+        println!("[POLY] Found {} active {} markets", markets_response.data.len(), asset);
+        Ok(markets_response.data)
     }
     
     /// Get wallet address as string
