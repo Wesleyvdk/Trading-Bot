@@ -667,58 +667,84 @@ impl PolymarketClient {
     pub async fn start_market_cache_updater(
         client: Arc<PolymarketClient>,
         cache: MarketCache,
-        assets: Vec<&'static str>
+        _assets: Vec<&'static str> // Assets are now hardcoded in the filter logic
     ) {
         let mut interval = interval(Duration::from_secs(60)); // Update every minute
         
         loop {
             interval.tick().await;
-            println!("[CACHE] Updating market cache for {:?}...", assets);
+            println!("[CACHE] Updating market cache (Global Fetch)...");
             
-            for &asset in &assets {
-                match client.fetch_crypto_markets(asset).await {
-                    Ok(markets) => {
-                        let mut cached_markets = Vec::new();
-                        
-                        for market in markets {
-                            // Only cache markets that have tokens and are active
-                            if !market.active || market.closed || market.tokens.len() < 2 {
-                                continue;
+            // Fetch top 1000 active markets by liquidity to find crypto markets
+            // We use liquidity because 'search' parameter is unreliable
+            let url = "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=1000&order=liquidity&descending=true";
+            
+            match client.client.get(url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        match resp.json::<Vec<Market>>().await {
+                            Ok(markets) => {
+                                let mut new_cache: HashMap<String, Vec<CachedMarket>> = HashMap::new();
+                                let mut count_map: HashMap<String, usize> = HashMap::new();
+                                
+                                for market in markets {
+                                    // Filter for relevant assets
+                                    let question_lower = market.question.as_deref().unwrap_or("").to_lowercase();
+                                    
+                                    let asset = if question_lower.contains("bitcoin") { "BTC" }
+                                    else if question_lower.contains("ethereum") { "ETH" }
+                                    else if question_lower.contains("solana") { "SOL" }
+                                    else if question_lower.contains("xrp") { "XRP" }
+                                    else { continue };
+                                    
+                                    // Only cache markets that have tokens and are active
+                                    if !market.active || market.closed || market.tokens.len() < 2 {
+                                        continue;
+                                    }
+                                    
+                                    // Determine market type (15-min or 60-min)
+                                    let market_type = if question_lower.contains("15 min") {
+                                        "15-MIN"
+                                    } else {
+                                        "60-MIN" // Default to 60-min or general
+                                    };
+                                    
+                                    let outcomes: Vec<String> = market.tokens.iter().map(|t| t.outcome.clone()).collect();
+                                    let token_ids: Vec<String> = market.tokens.iter().map(|t| t.token_id.clone()).collect();
+                                    
+                                    let cached_market = CachedMarket {
+                                        asset: asset.to_string(),
+                                        market_type: market_type.to_string(),
+                                        condition_id: market.condition_id.clone(),
+                                        question_id: market.question_id.clone().unwrap_or_default(),
+                                        token_ids,
+                                        outcomes,
+                                        end_date_iso: "".to_string(),
+                                    };
+                                    
+                                    new_cache.entry(asset.to_string()).or_default().push(cached_market);
+                                    *count_map.entry(asset.to_string()).or_default() += 1;
+                                }
+                                
+                                // Update the shared cache
+                                if let Ok(mut write_guard) = cache.write() {
+                                    *write_guard = new_cache;
+                                }
+                                
+                                println!("[CACHE] Updated: BTC={}, ETH={}, SOL={}, XRP={}", 
+                                    count_map.get("BTC").unwrap_or(&0),
+                                    count_map.get("ETH").unwrap_or(&0),
+                                    count_map.get("SOL").unwrap_or(&0),
+                                    count_map.get("XRP").unwrap_or(&0)
+                                );
                             }
-                            
-                            // Determine market type (15-min or 60-min) based on title/slug
-                            // This is a heuristic - we might need better logic
-                            let market_type = if market.question.as_deref().unwrap_or("").to_lowercase().contains("15 min") {
-                                "15-MIN"
-                            } else {
-                                "60-MIN" // Default to 60-min or general
-                            };
-                            
-                            let outcomes: Vec<String> = market.tokens.iter().map(|t| t.outcome.clone()).collect();
-                            let token_ids: Vec<String> = market.tokens.iter().map(|t| t.token_id.clone()).collect();
-                            
-                            cached_markets.push(CachedMarket {
-                                asset: asset.to_string(),
-                                market_type: market_type.to_string(),
-                                condition_id: market.condition_id.clone(),
-                                question_id: market.question_id.clone().unwrap_or_default(),
-                                token_ids,
-                                outcomes,
-                                end_date_iso: "".to_string(), // TODO: Parse end date if needed
-                            });
+                            Err(e) => eprintln!("[CACHE] Failed to parse markets: {}", e),
                         }
-                        
-                        // Update cache for this asset
-                        if let Ok(mut write_guard) = cache.write() {
-                            write_guard.insert(asset.to_string(), cached_markets.clone());
-                        }
-                        
-                        println!("[CACHE] Updated {} markets for {}", cached_markets.len(), asset);
-                    }
-                    Err(e) => {
-                        eprintln!("[CACHE] Failed to fetch markets for {}: {}", asset, e);
+                    } else {
+                        eprintln!("[CACHE] API error: {}", resp.status());
                     }
                 }
+                Err(e) => eprintln!("[CACHE] Request failed: {}", e),
             }
         }
     }
