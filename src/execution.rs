@@ -120,9 +120,11 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
                     match client.fetch_crypto_markets(asset_name).await {
                         Ok(markets) => {
                             if let Some(market) = markets.first() {
-                                // Find the correct token (YES or NO)
-                                let target_outcome = if trade.side == 0 { "Yes" } else { "No" };
-                                if let Some(token) = market.tokens.iter().find(|t| t.outcome == target_outcome) {
+                                // Find the correct token - crypto hourly uses "Up"/"Down" outcomes
+                                let target_outcome = if trade.side == 0 { "Up" } else { "Down" };
+                                if let Some(token) = market.tokens.iter().find(|t| 
+                                    t.outcome.eq_ignore_ascii_case(target_outcome)
+                                ) {
                                     println!(" Token ID: {}...", &token.token_id[..20.min(token.token_id.len())]);
                                     
                                     // Create the order
