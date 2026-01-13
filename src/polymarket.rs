@@ -258,11 +258,6 @@ impl PolymarketClient {
     
     /// Fetch active crypto hourly markets using gamma-api auto-discovery
     pub async fn fetch_crypto_markets(&self, asset: &str) -> Result<Vec<Market>, String> {
-        // Try gamma-api for better crypto market discovery
-        let gamma_url = format!(
-            "https://gamma-api.polymarket.com/events?closed=false&active=true&limit=50"
-        );
-        
         println!("[POLY] Auto-discovering {} crypto markets...", asset);
         
         // First, try to find events with the asset name and "up or down" pattern
@@ -320,13 +315,14 @@ impl PolymarketClient {
             return Err(format!("API error {}: {}", status, text));
         }
         
-        let markets: Vec<Market> = response
+        // CLOB API returns {"data": [...]} wrapper
+        let markets_response: MarketsResponse = response
             .json()
             .await
             .map_err(|e| format!("Failed to parse markets: {:?}", e))?;
         
         // Filter for crypto markets with Up/Down outcomes
-        let crypto_markets: Vec<Market> = markets.into_iter()
+        let crypto_markets: Vec<Market> = markets_response.data.into_iter()
             .filter(|m| {
                 let has_up_down = m.tokens.iter().any(|t| 
                     t.outcome.eq_ignore_ascii_case("Up") || t.outcome.eq_ignore_ascii_case("Down")
