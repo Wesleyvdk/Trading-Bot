@@ -119,7 +119,17 @@ pub async fn run_execution(mut consumer: Consumer<TradeInstruction>, db_logger: 
                     // Fetch active markets for this asset
                     match client.fetch_crypto_markets(asset_name).await {
                         Ok(markets) => {
-                            if let Some(market) = markets.first() {
+                            // Find a market with Up/Down outcomes (crypto hourly specific)
+                            let crypto_market = markets.iter().find(|m| {
+                                m.tokens.iter().any(|t| t.outcome.eq_ignore_ascii_case("Up") || t.outcome.eq_ignore_ascii_case("Down"))
+                            });
+                            
+                            if let Some(market) = crypto_market {
+                                // Debug: show what we found
+                                let outcomes: Vec<&str> = market.tokens.iter().map(|t| t.outcome.as_str()).collect();
+                                println!(" Market:   {:?}", market.question.as_deref().unwrap_or("unknown")[..50.min(market.question.as_deref().unwrap_or("").len())]);
+                                println!(" Outcomes: {:?}", outcomes);
+                                
                                 // Find the correct token - crypto hourly uses "Up"/"Down" outcomes
                                 let target_outcome = if trade.side == 0 { "Up" } else { "Down" };
                                 if let Some(token) = market.tokens.iter().find(|t| 
