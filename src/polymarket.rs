@@ -292,13 +292,28 @@ impl PolymarketClient {
         
         // Use the search parameter to filter by asset name
         // This is more reliable than slug_contains which appears to be broken for some assets
-        let asset_lower = asset.to_lowercase();
-        let search_url = format!(
-            "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=100&search={}",
-            urlencoding::encode(&asset_lower)
-        );
+        // Determine if we have a known tag ID for this asset
+        // tag_id=235 is "Bitcoin" - this is much more reliable than search=bitcoin
+        let tag_id = match asset_lower.as_str() {
+            "btc" | "bitcoin" => Some("235"),
+            _ => None,
+        };
+
+        let search_url = if let Some(tid) = tag_id {
+            println!("[POLY] Using tag_id={} for '{}' market discovery", tid, asset);
+            format!(
+                "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=100&tag_id={}&order=startDate&descending=true",
+                tid
+            )
+        } else {
+            println!("[POLY] Using search parameter for '{}' market discovery", asset);
+            format!(
+                "https://gamma-api.polymarket.com/markets?closed=false&active=true&limit=100&search={}",
+                urlencoding::encode(&asset_lower)
+            )
+        };
         
-        println!("[POLY] Searching gamma-api markets for '{}'...", asset);
+        println!("[POLY] Querying gamma-api: {}", search_url);
         
         let response = self.client
             .get(&search_url)
