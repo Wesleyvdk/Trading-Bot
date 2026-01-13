@@ -337,7 +337,11 @@ impl PolymarketClient {
     /// Create a new client from environment variables
     pub fn from_env() -> Option<Self> {
         let api_key = match std::env::var("POLYMARKET_API_KEY") {
-            Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+            Ok(v) if !v.trim().is_empty() => {
+                let key = v.trim().to_string();
+                println!("[AUTH] Loaded API Key: {}... (len={})", &key[0..4.min(key.len())], key.len());
+                key
+            },
             _ => {
                 eprintln!("❌ POLYMARKET_API_KEY is missing or empty");
                 return None;
