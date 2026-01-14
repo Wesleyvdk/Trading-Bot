@@ -1,4 +1,5 @@
 use alloy_signer_local::PrivateKeySigner;
+use chrono::Datelike;
 use polymarket_rs::client::{AuthenticatedClient, GammaClient, TradingClient};
 use polymarket_rs::types::{
     ApiCreds, CreateOrderOptions, OrderArgs, Side as PolySide, OrderType,
@@ -162,42 +163,133 @@ impl PolymarketClient {
         let mut interval = interval(Duration::from_secs(300));
         loop {
             interval.tick().await;
-            println!("🔎 Updating Market Cache...");
+            println!("🔎 Updating Market Cache with daily crypto markets...");
             
-            // Use GammaClient to fetch events
+            let mut new_markets: HashMap<String, Vec<CachedMarket>> = HashMap::new();
+            let mut count = 0;
+            
+            // Get today's date for generating slugs
+            let now = chrono::Utc::now();
+            let month = match now.month() {
+                1 => "january",
+                2 => "february",
+                3 => "march",
+                4 => "april",
+                5 => "may",
+                6 => "june",
+                7 => "july",
+                8 => "august",
+                9 => "september",
+                10 => "october",
+                11 => "november",
+                12 => "december",
+                _ => "january"
+            };
+            let day = now.day();
+            
+            // Fetch daily "Up or Down" markets for BTC, ETH, SOL
+            let assets_to_fetch = vec![
+                ("bitcoin", "BTC"),
+                ("ethereum", "ETH"),
+                ("solana", "SOL"),
+            ];
+            
+            for (asset_slug, asset_symbol) in assets_to_fetch {
+                // Generate the slug: e.g., "bitcoin-up-or-down-on-january-14"
+                let slug = format!("{}-up-or-down-on-{}-{}", asset_slug, month, day);
+                println!("   📊 Fetching {} daily: {}", asset_symbol, slug);
+                
+                // Fetch market by slug using the Gamma API directly
+                let url = format!(
+                    "https://gamma-api.polymarket.com/markets?slug={}",
+                    slug
+                );
+                
+                match reqwest::get(&url).await {
+                    Ok(response) => {
+                        if let Ok(markets) = response.json::<Vec<GammaMarketResponse>>().await {
+                            if let Some(market) = markets.first() {
+                                // Skip closed markets
+                                if market.closed.unwrap_or(false) {
+                                    println!("   ⚠️ {} daily market is closed", asset_symbol);
+                                    continue;
+                                }
+                                
+                                // Parse token IDs from JSON string
+                                let token_ids: Vec<String> = market.clob_token_ids
+                                    .as_ref()
+                                    .and_then(|s| serde_json::from_str(s).ok())
+                                    .unwrap_or_default();
+                                
+                                // Parse outcomes from JSON string
+                                let outcomes: Vec<String> = market.outcomes
+                                    .as_ref()
+                                    .and_then(|s| serde_json::from_str(s).ok())
+                                    .unwrap_or_else(|| vec!["Up".to_string(), "Down".to_string()]);
+                                
+                                if token_ids.len() == 2 {
+                                    let cached_market = CachedMarket {
+                                        asset: asset_symbol.to_string(),
+                                        market_type: "DAILY".to_string(),
+                                        condition_id: market.condition_id.clone(),
+                                        question_id: market.id.clone(),
+                                        token_ids: token_ids.clone(),
+                                        outcomes,
+                                        end_date_iso: market.end_date.clone().unwrap_or_default(),
+                                    };
+                                    
+                                    println!("   ✅ Found {} daily: {}", asset_symbol, market.id);
+                                    println!("      Token IDs: [{}, {}]", 
+                                        &token_ids[0][..20.min(token_ids[0].len())],
+                                        &token_ids[1][..20.min(token_ids[1].len())]);
+                                    
+                                    new_markets.entry(asset_symbol.to_string())
+                                        .or_insert_with(Vec::new)
+                                        .push(cached_market);
+                                    count += 1;
+                                }
+                            } else {
+                                println!("   ⚠️ {} daily market not found: {}", asset_symbol, slug);
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("   ❌ Failed to fetch {}: {}", slug, e),
+                }
+            }
+            
+            // Also try to fetch shorter timeframe markets using the old method
             match client.gamma.get_events().await {
                 Ok(events) => {
-                    let mut new_markets: HashMap<String, Vec<CachedMarket>> = HashMap::new();
-                    let mut count = 0;
-                    
                     for event in events {
-                        // Check if event contains crypto-related markets
-                        let _event_title = event.title.to_lowercase();
-                        
-                        // Process markets in this event
                         for market in &event.markets {
                             let question = market.question.to_lowercase();
                             
-                            // Determine asset (BTC, ETH, SOL, XRP)
+                            // Look for 15-min or hourly markets
+                            let is_short_term = question.contains("15") || 
+                                               question.contains("fifteen") ||
+                                               question.contains("hour") ||
+                                               question.contains("60");
+                            
+                            if !is_short_term {
+                                continue;
+                            }
+                            
+                            // Determine asset (BTC, ETH, SOL)
                             let asset = if question.contains("bitcoin") || question.contains("btc") {
                                 "BTC"
                             } else if question.contains("ethereum") || question.contains("eth") {
                                 "ETH"
                             } else if question.contains("solana") || question.contains("sol") {
                                 "SOL"
-                            } else if question.contains("xrp") || question.contains("ripple") {
-                                "XRP"
                             } else {
-                                continue; // Skip unknown assets
+                                continue;
                             };
                             
                             // Determine market type
                             let market_type = if question.contains("15") || question.contains("fifteen") {
                                 "15-MIN"
-                            } else if question.contains("60") || question.contains("hour") {
-                                "60-MIN"
                             } else {
-                                "15-MIN" // Default
+                                "60-MIN"
                             };
                             
                             // Get token IDs from clob_token_ids JSON string
@@ -222,7 +314,7 @@ impl PolymarketClient {
                                     question_id: market.id.clone(),
                                     token_ids,
                                     outcomes,
-                                    end_date_iso: String::new(), // Not available in GammaMarket
+                                    end_date_iso: String::new(),
                                 };
                                 
                                 new_markets.entry(asset.to_string())
@@ -232,27 +324,36 @@ impl PolymarketClient {
                             }
                         }
                     }
-                    
-                    // Update the cache
-                    if let Ok(mut write_guard) = cache.write() {
-                        // Log which markets were found
-                        for (asset, markets) in &new_markets {
-                            for m in markets {
-                                println!("   📈 {} {}: {} (tokens: {}, {})", 
-                                    m.asset, m.market_type, m.question_id,
-                                    &m.token_ids[0][..20.min(m.token_ids[0].len())],
-                                    &m.token_ids[1][..20.min(m.token_ids[1].len())]);
-                            }
-                        }
-                        *write_guard = new_markets;
-                        println!("✅ Updated Market Cache: {} markets found", count);
-                    } else {
-                        eprintln!("❌ Failed to acquire write lock on market cache");
-                    }
                 }
-                Err(e) => eprintln!("❌ Failed to fetch events from Gamma: {}", e),
+                Err(e) => eprintln!("   ⚠️ Could not fetch short-term markets: {}", e),
+            }
+            
+            // Update the cache
+            if let Ok(mut write_guard) = cache.write() {
+                // Log summary
+                for (asset, markets) in &new_markets {
+                    println!("   📈 {}: {} markets", asset, markets.len());
+                }
+                *write_guard = new_markets;
+                println!("✅ Updated Market Cache: {} markets found", count);
+            } else {
+                eprintln!("❌ Failed to acquire write lock on market cache");
             }
         }
     }
+}
+
+/// Response type for Gamma API market queries
+#[derive(Debug, Deserialize)]
+struct GammaMarketResponse {
+    id: String,
+    #[serde(rename = "conditionId")]
+    condition_id: String,
+    #[serde(rename = "clobTokenIds")]
+    clob_token_ids: Option<String>,
+    outcomes: Option<String>,
+    #[serde(rename = "endDate")]
+    end_date: Option<String>,
+    closed: Option<bool>,
 }
 

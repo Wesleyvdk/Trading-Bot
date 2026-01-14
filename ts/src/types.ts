@@ -4,7 +4,7 @@ export interface Market {
     token_ids: string[]; // [YES, NO]
     outcomes: string[];
     end_date_iso: string;
-    market_type: "15-MIN" | "60-MIN";
+    market_type: "15-MIN" | "60-MIN" | "DAILY";
     asset: string;
 }
 
