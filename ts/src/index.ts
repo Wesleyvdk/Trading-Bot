@@ -4,6 +4,7 @@ import { initializeClient } from "./client";
 import { updateMarkets } from "./market";
 import { processPriceUpdate } from "./strategy";
 import type { Market } from "./types";
+import { AssetType } from "@polymarket/clob-client";
 
 let markets: Market[] = [];
 
@@ -13,14 +14,26 @@ async function main() {
     // 1. Initialize Client
     const client = await initializeClient();
 
-    // 2. Market Discovery
+    // 2. Fetch Initial Balance
+    try {
+        const balanceAllowance = await client.getBalanceAllowance({
+            asset_type: AssetType.COLLATERAL // USDC balance
+        });
+        const balanceRaw = parseFloat(balanceAllowance?.balance || "0");
+        const balance = balanceRaw / 1_000_000; // Convert from 6 decimals
+        console.log(`💰 Initial Balance: $${balance.toFixed(2)}`);
+    } catch (e) {
+        console.error("⚠️ Could not fetch balance:", e);
+    }
+
+    // 3. Market Discovery
     console.log("🔎 Discovering Markets...");
     markets = await updateMarkets(client);
     setInterval(async () => {
         markets = await updateMarkets(client);
     }, 5 * 60 * 1000);
 
-    // 3. Connect to Binance
+    // 4. Connect to Binance
     console.log(`Connecting to ${CONFIG.BINANCE_WS_URL}...`);
     const ws = new WebSocket(CONFIG.BINANCE_WS_URL);
 
