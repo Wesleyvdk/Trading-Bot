@@ -101,6 +101,9 @@ impl PolymarketClient {
         
         let response = self.authenticated.get_balance_allowance(params).await?;
         
+        // Debug: print the raw response
+        println!("📊 Balance API response: {:?}", response);;
+        
         // Parse the balance from the JSON response
         // Response format is typically: {"balance": "...", "allowance": "..."}
         if let Some(balance_str) = response.get("balance").and_then(|b| b.as_str()) {
@@ -232,6 +235,15 @@ impl PolymarketClient {
                     
                     // Update the cache
                     if let Ok(mut write_guard) = cache.write() {
+                        // Log which markets were found
+                        for (asset, markets) in &new_markets {
+                            for m in markets {
+                                println!("   📈 {} {}: {} (tokens: {}, {})", 
+                                    m.asset, m.market_type, m.question_id,
+                                    &m.token_ids[0][..20.min(m.token_ids[0].len())],
+                                    &m.token_ids[1][..20.min(m.token_ids[1].len())]);
+                            }
+                        }
                         *write_guard = new_markets;
                         println!("✅ Updated Market Cache: {} markets found", count);
                     } else {
