@@ -4,7 +4,7 @@
 //! heartbeats, and wallet balance snapshots to the dashboard database.
 
 use sqlx::{postgres::PgPoolOptions, PgPool, Error};
-use chrono::{DateTime, Utc};
+// use chrono::{DateTime, Utc};
 use bigdecimal::BigDecimal;
 use std::str::FromStr;
 
