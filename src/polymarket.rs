@@ -257,75 +257,91 @@ impl PolymarketClient {
                 }
             }
             
-            // Also try to fetch shorter timeframe markets using the old method
-            match client.gamma.get_events().await {
-                Ok(events) => {
-                    for event in events {
-                        for market in &event.markets {
-                            let question = market.question.to_lowercase();
-                            
-                            // Look for 15-min or hourly markets
-                            let is_short_term = question.contains("15") || 
-                                               question.contains("fifteen") ||
-                                               question.contains("hour") ||
-                                               question.contains("60");
-                            
-                            if !is_short_term {
-                                continue;
-                            }
-                            
-                            // Determine asset (BTC, ETH, SOL)
-                            let asset = if question.contains("bitcoin") || question.contains("btc") {
-                                "BTC"
-                            } else if question.contains("ethereum") || question.contains("eth") {
-                                "ETH"
-                            } else if question.contains("solana") || question.contains("sol") {
-                                "SOL"
-                            } else {
-                                continue;
-                            };
-                            
-                            // Determine market type
-                            let market_type = if question.contains("15") || question.contains("fifteen") {
-                                "15-MIN"
-                            } else {
-                                "60-MIN"
-                            };
-                            
-                            // Get token IDs from clob_token_ids JSON string
-                            let token_ids: Vec<String> = if let Some(ref ids_str) = market.clob_token_ids {
-                                serde_json::from_str(ids_str).unwrap_or_default()
-                            } else {
-                                Vec::new()
-                            };
-                            
-                            // Parse outcomes from JSON string
-                            let outcomes: Vec<String> = if let Some(ref outcomes_str) = market.outcomes {
-                                serde_json::from_str(outcomes_str).unwrap_or_default()
-                            } else {
-                                Vec::new()
-                            };
-                            
-                            if token_ids.len() == 2 {
-                                let cached_market = CachedMarket {
-                                    asset: asset.to_string(),
-                                    market_type: market_type.to_string(),
-                                    condition_id: market.condition_id.clone(),
-                                    question_id: market.id.clone(),
-                                    token_ids,
-                                    outcomes,
-                                    end_date_iso: String::new(),
-                                };
-                                
-                                new_markets.entry(asset.to_string())
-                                    .or_insert_with(Vec::new)
-                                    .push(cached_market);
-                                count += 1;
+            // Fetch hourly markets using series_slug API (more reliable)
+            let hourly_series = vec![
+                ("btc-up-or-down-hourly", "BTC"),
+                ("eth-up-or-down-hourly", "ETH"),
+                ("sol-up-or-down-hourly", "SOL"),
+            ];
+            
+            for (series_slug, asset) in hourly_series {
+                let url = format!(
+                    "https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&series_slug={}",
+                    series_slug
+                );
+                println!("   📊 Fetching {} hourly markets from series: {}", asset, series_slug);
+                
+                match reqwest::get(&url).await {
+                    Ok(response) => {
+                        if let Ok(events) = response.json::<Vec<serde_json::Value>>().await {
+                            for event in events {
+                                if let Some(markets) = event.get("markets").and_then(|m| m.as_array()) {
+                                    for market in markets {
+                                        // Check if closed
+                                        let is_closed = market.get("closed")
+                                            .and_then(|c| c.as_bool())
+                                            .unwrap_or(false);
+                                        if is_closed {
+                                            continue;
+                                        }
+                                        
+                                        // Get market data
+                                        let condition_id = market.get("conditionId")
+                                            .and_then(|c| c.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let question_id = market.get("id")
+                                            .and_then(|i| i.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let question = market.get("question")
+                                            .and_then(|q| q.as_str())
+                                            .unwrap_or("");
+                                        
+                                        // Parse token IDs
+                                        let token_ids: Vec<String> = market.get("clobTokenIds")
+                                            .and_then(|t| t.as_str())
+                                            .and_then(|s| serde_json::from_str(s).ok())
+                                            .unwrap_or_default();
+                                        
+                                        // Parse outcomes
+                                        let outcomes: Vec<String> = market.get("outcomes")
+                                            .and_then(|o| o.as_str())
+                                            .and_then(|s| serde_json::from_str(s).ok())
+                                            .unwrap_or_else(|| vec!["Up".to_string(), "Down".to_string()]);
+                                        
+                                        let end_date = market.get("endDate")
+                                            .and_then(|e| e.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        
+                                        if token_ids.len() == 2 && !condition_id.is_empty() {
+                                            let cached_market = CachedMarket {
+                                                asset: asset.to_string(),
+                                                market_type: "60-MIN".to_string(),
+                                                condition_id,
+                                                question_id: question_id.clone(),
+                                                token_ids: token_ids.clone(),
+                                                outcomes,
+                                                end_date_iso: end_date,
+                                            };
+                                            
+                                            println!("   ✅ Found {} hourly: {}...", 
+                                                asset, 
+                                                &question[..50.min(question.len())]);
+                                            
+                                            new_markets.entry(asset.to_string())
+                                                .or_insert_with(Vec::new)
+                                                .push(cached_market);
+                                            count += 1;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                    Err(e) => eprintln!("   ⚠️ Failed to fetch {} hourly series: {}", asset, e),
                 }
-                Err(e) => eprintln!("   ⚠️ Could not fetch short-term markets: {}", e),
             }
             
             // Update the cache

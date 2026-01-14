@@ -124,10 +124,85 @@ async function fetchMarketBySlug(slug: string): Promise<Market | null> {
 }
 
 /**
+ * Fetch hourly markets using the series_slug API (more reliable for hourly markets)
+ */
+async function fetchHourlyMarketsBySeries(): Promise<Market[]> {
+    const markets: Market[] = [];
+    
+    // Series slugs for hourly "Up or Down" markets
+    const hourlySeriesSlugs = [
+        { slug: "btc-up-or-down-hourly", asset: "BTC" },
+        { slug: "eth-up-or-down-hourly", asset: "ETH" },
+        { slug: "sol-up-or-down-hourly", asset: "SOL" },
+    ];
+    
+    for (const { slug: seriesSlug, asset } of hourlySeriesSlugs) {
+        try {
+            const url = `https://gamma-api.polymarket.com/events?limit=5&active=true&closed=false&series_slug=${seriesSlug}`;
+            console.log(`   📊 Fetching ${asset} hourly markets from series: ${seriesSlug}`);
+            
+            const response = await fetch(url);
+            const events = await response.json() as GammaEvent[];
+            
+            for (const event of events) {
+                if (!event.markets) continue;
+                
+                for (const market of event.markets) {
+                    if (market.closed) continue;
+                    
+                    // Parse token IDs
+                    let tokenIds: string[] = [];
+                    if (market.clobTokenIds) {
+                        try {
+                            tokenIds = JSON.parse(market.clobTokenIds);
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+                    
+                    if (tokenIds.length !== 2) continue;
+                    
+                    // Parse outcomes
+                    let outcomes: string[] = [];
+                    if (market.outcomes) {
+                        try {
+                            outcomes = JSON.parse(market.outcomes);
+                        } catch (e) {
+                            outcomes = ["Up", "Down"];
+                        }
+                    }
+                    
+                    markets.push({
+                        condition_id: market.conditionId,
+                        question_id: market.questionID || market.id,
+                        token_ids: tokenIds,
+                        outcomes: outcomes,
+                        end_date_iso: market.endDate || market.endDateIso || "",
+                        market_type: "60-MIN",
+                        asset: asset
+                    });
+                    
+                    console.log(`   ✅ Found ${asset} hourly: ${market.question?.slice(0, 50)}...`);
+                }
+            }
+        } catch (e) {
+            console.log(`   ⚠️ Could not fetch ${asset} hourly series: ${e}`);
+        }
+    }
+    
+    return markets;
+}
+
+/**
  * Fetch markets from a specific category page (15M, hourly, etc.)
  */
 async function fetchCategoryMarkets(category: MarketTimeframe): Promise<Market[]> {
     const markets: Market[] = [];
+    
+    // For hourly markets, use the series_slug API which is more reliable
+    if (category === "hourly") {
+        return fetchHourlyMarketsBySeries();
+    }
     
     try {
         // Fetch events for the category - the Gamma API doesn't have a direct category filter,
@@ -157,9 +232,6 @@ async function fetchCategoryMarkets(category: MarketTimeframe): Promise<Market[]
                 if (category === "15M") {
                     matchesTimeframe = question.includes("15") || question.includes("fifteen");
                     marketType = "15-MIN";
-                } else if (category === "hourly") {
-                    matchesTimeframe = question.includes("hour") || question.includes("60");
-                    marketType = "60-MIN";
                 } else if (category === "daily") {
                     matchesTimeframe = question.includes("up or down") && 
                                        (question.includes("january") || question.includes("february") ||
