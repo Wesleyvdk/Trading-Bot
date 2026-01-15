@@ -150,6 +150,13 @@ async function fetchHourlyMarketsBySeries(): Promise<Market[]> {
                 for (const market of event.markets) {
                     if (market.closed) continue;
                     
+                    // FILTER: Only accept markets with "up or down" in the question
+                    const question = (market.question || "").toLowerCase();
+                    if (!question.includes("up or down") && !question.includes("up/down")) {
+                        // Skip unrelated markets (MicroStrategy, Trump, etc.)
+                        continue;
+                    }
+                    
                     // Parse token IDs
                     let tokenIds: string[] = [];
                     if (market.clobTokenIds) {

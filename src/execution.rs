@@ -159,11 +159,23 @@ pub async fn run_execution(
                     let mut found_market = None;
                     if let Ok(cache) = market_cache.read() {
                         if let Some(markets) = cache.get(asset_name) {
-                            // Find matching market (15-min or 60-min)
+                            // Try to find exact market type first (15-MIN or 60-MIN)
                             found_market = markets
                                 .iter()
                                 .find(|m| m.market_type == market_type)
                                 .cloned();
+                            
+                            // Fallback: If no 60-MIN or 15-MIN market found, use DAILY
+                            // (Polymarket may not have hourly crypto markets available)
+                            if found_market.is_none() {
+                                found_market = markets
+                                    .iter()
+                                    .find(|m| m.market_type == "DAILY")
+                                    .cloned();
+                                if found_market.is_some() {
+                                    println!(" Fallback: Using DAILY market (no {} available)", market_type);
+                                }
+                            }
                         }
                     }
 

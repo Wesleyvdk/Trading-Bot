@@ -14,6 +14,13 @@ export async function initializeClient(): Promise<ClobClient> {
 
     if (CONFIG.POLYMARKET_API_KEY && CONFIG.POLYMARKET_API_SECRET && CONFIG.POLYMARKET_PASSPHRASE) {
         console.log("✅ Using provided L2 API Credentials");
+        
+        // For Magic.Link wallets, we need to specify the funder (proxy wallet) address
+        const funderAddress = process.env.POLYMARKET_FUNDER_ADDRESS;
+        if (funderAddress) {
+            console.log(`📝 Using Funder (Proxy) Address: ${funderAddress}`);
+        }
+        
         client = new ClobClient(
             CONFIG.POLYMARKET_CLOB_URL,
             CONFIG.CHAIN_ID,
@@ -22,7 +29,9 @@ export async function initializeClient(): Promise<ClobClient> {
                 key: CONFIG.POLYMARKET_API_KEY,
                 secret: CONFIG.POLYMARKET_API_SECRET,
                 passphrase: CONFIG.POLYMARKET_PASSPHRASE,
-            }
+            },
+            1, // signature_type: 1 = Magic.Link / Email wallet
+            funderAddress // The proxy wallet address that holds your funds
         );
     } else {
         console.log("⚠️ No L2 Credentials found in env. Deriving from Private Key...");
