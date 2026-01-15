@@ -174,11 +174,26 @@ pub async fn run_execution(
                         );
 
                         // Find the correct token ID
+                        // For crypto markets: side 0 = Up (price going up), side 1 = Down
+                        // Some markets use "Yes"/"No" instead of "Up"/"Down"
                         let target_outcome = if trade.side == 0 { "Up" } else { "Down" };
+                        let alt_outcome = if trade.side == 0 { "Yes" } else { "No" };
+                        
+                        // Debug: show available outcomes
+                        println!(" Outcomes: {:?}", market.outcomes);
+                        
+                        // Try primary outcome first, then fallback
                         let token_index = market
                             .outcomes
                             .iter()
-                            .position(|o| o.eq_ignore_ascii_case(target_outcome));
+                            .position(|o| o.eq_ignore_ascii_case(target_outcome))
+                            .or_else(|| market.outcomes.iter().position(|o| o.eq_ignore_ascii_case(alt_outcome)))
+                            .or_else(|| {
+                                // Last resort: use index directly (0 for Up/Yes, 1 for Down/No)
+                                if trade.side == 0 && market.outcomes.len() >= 1 { Some(0) }
+                                else if trade.side == 1 && market.outcomes.len() >= 2 { Some(1) }
+                                else { None }
+                            });
 
                         if let Some(idx) = token_index {
                             let token_id = &market.token_ids[idx];

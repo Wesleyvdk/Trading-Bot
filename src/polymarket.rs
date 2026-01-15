@@ -315,6 +315,17 @@ impl PolymarketClient {
                                             .unwrap_or("")
                                             .to_string();
                                         
+                                        // FILTER: Only accept markets with "up or down" in the question
+                                        // This filters out unrelated markets like "MicroStrategy" or "Trump deport"
+                                        let question_lower = question.to_lowercase();
+                                        let is_price_market = question_lower.contains("up or down") || 
+                                                            question_lower.contains("up/down");
+                                        
+                                        if !is_price_market {
+                                            // Skip non-price markets silently
+                                            continue;
+                                        }
+                                        
                                         if token_ids.len() == 2 && !condition_id.is_empty() {
                                             let cached_market = CachedMarket {
                                                 asset: asset.to_string(),
