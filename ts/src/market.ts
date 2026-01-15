@@ -230,7 +230,19 @@ async function fetchCategoryMarkets(category: MarketTimeframe): Promise<Market[]
                 let marketType: "15-MIN" | "60-MIN" | "DAILY" = "15-MIN";
                 
                 if (category === "15M") {
-                    matchesTimeframe = question.includes("15") || question.includes("fifteen");
+                    // 15-minute markets use specific patterns - be more precise to avoid false matches
+                    // Look for explicit "15-minute", "15 minute", or "fifteen minute" patterns
+                    // Combined with "up or down" to ensure it's a price direction market
+                    const is15MinFormat = (
+                        question.includes("15-minute") || 
+                        question.includes("15 minute") || 
+                        question.includes("fifteen minute") ||
+                        question.includes("fifteen-minute")
+                    );
+                    const isUpOrDown = question.includes("up or down") || question.includes("up/down");
+                    
+                    // Only match if it has both the 15-minute pattern AND is an up/down market
+                    matchesTimeframe = is15MinFormat && isUpOrDown;
                     marketType = "15-MIN";
                 } else if (category === "daily") {
                     matchesTimeframe = question.includes("up or down") && 
@@ -311,9 +323,14 @@ export async function updateMarkets(client: ClobClient): Promise<Market[]> {
     }
     
     // Also fetch 15-minute and hourly markets if available
+    // Note: As of 2026-01, Polymarket may not have 15-minute crypto markets like they do hourly/daily
     console.log("   📊 Fetching 15-minute and hourly crypto markets...");
     const shortTermMarkets = await fetchCategoryMarkets("15M");
     const hourlyMarkets = await fetchCategoryMarkets("hourly");
+    
+    if (shortTermMarkets.length === 0) {
+        console.log("   ℹ️ No 15-minute markets found (these may not be available on Polymarket)");
+    }
     
     newMarkets.push(...shortTermMarkets);
     newMarkets.push(...hourlyMarkets);
