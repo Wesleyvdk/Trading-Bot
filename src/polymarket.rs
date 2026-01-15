@@ -75,16 +75,31 @@ impl PolymarketClient {
             passphrase: passphrase.clone(),
         };
 
+        // For Magic.Link wallets, use the funder (proxy wallet) address
+        let funder_address_str = std::env::var("POLYMARKET_FUNDER_ADDRESS").ok();
+        let funder_address: Option<polymarket_rs::Address> = funder_address_str.as_ref().and_then(|s| {
+            polymarket_rs::Address::from_str(s).ok()
+        });
+        if let Some(ref funder) = funder_address {
+            println!("📝 Using Funder (Proxy) Address: {:?}", funder);
+        }
+
         // Create authenticated client for balance queries
         let authenticated = AuthenticatedClient::new(
             host,
             wallet.clone(),
             chain_id,
             Some(creds.clone()),
-            None, // No funder
+            funder_address, // Funder address for Magic.Link wallets
         );
 
-        let builder = OrderBuilder::new(wallet.clone(), None, None);
+        // For Magic.Link, use SignatureType::PolyProxy (type 1) 
+        let sig_type = if funder_address_str.is_some() {
+            Some(polymarket_rs::types::SignatureType::PolyProxy)
+        } else {
+            None
+        };
+        let builder = OrderBuilder::new(wallet.clone(), sig_type, funder_address);
         let trading = TradingClient::new(host, wallet, chain_id, creds, builder);
 
         Some(Self {
