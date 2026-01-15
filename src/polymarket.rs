@@ -202,6 +202,25 @@ impl PolymarketClient {
             };
             let day = now.day();
             
+            // Calculate tomorrow's date
+            let tomorrow = now + chrono::Duration::days(1);
+            let tomorrow_month = match tomorrow.month() {
+                1 => "january",
+                2 => "february",
+                3 => "march",
+                4 => "april",
+                5 => "may",
+                6 => "june",
+                7 => "july",
+                8 => "august",
+                9 => "september",
+                10 => "october",
+                11 => "november",
+                12 => "december",
+                _ => "january"
+            };
+            let tomorrow_day = tomorrow.day();
+            
             // Fetch daily "Up or Down" markets for BTC, ETH, SOL
             let assets_to_fetch = vec![
                 ("bitcoin", "BTC"),
@@ -209,10 +228,21 @@ impl PolymarketClient {
                 ("solana", "SOL"),
             ];
             
+            // Try today first, then tomorrow
+            let date_options = vec![
+                (month, day, "today"),
+                (tomorrow_month, tomorrow_day, "tomorrow"),
+            ];
+            
             for (asset_slug, asset_symbol) in assets_to_fetch {
-                // Generate the slug: e.g., "bitcoin-up-or-down-on-january-14"
-                let slug = format!("{}-up-or-down-on-{}-{}", asset_slug, month, day);
-                println!("   📊 Fetching {} daily: {}", asset_symbol, slug);
+                let mut found_market = false;
+                
+                for (m, d, label) in &date_options {
+                    if found_market { break; }
+                    
+                    // Generate the slug: e.g., "bitcoin-up-or-down-on-january-16"
+                    let slug = format!("{}-up-or-down-on-{}-{}", asset_slug, m, d);
+                    println!("   📊 Fetching {} daily ({}): {}", asset_symbol, label, slug);
                 
                 // Fetch market by slug using the Gamma API directly
                 let url = format!(
@@ -262,15 +292,17 @@ impl PolymarketClient {
                                         .or_insert_with(Vec::new)
                                         .push(cached_market);
                                     count += 1;
+                                    found_market = true; // Stop trying other dates
                                 }
                             } else {
-                                println!("   ⚠️ {} daily market not found: {}", asset_symbol, slug);
+                                // Market not found for this date, try next
                             }
                         }
                     }
                     Err(e) => eprintln!("   ❌ Failed to fetch {}: {}", slug, e),
                 }
-            }
+                } // end of date_options loop
+            } // end of assets loop
             
             // Fetch hourly markets using series_slug API (more reliable)
             let hourly_series = vec![
