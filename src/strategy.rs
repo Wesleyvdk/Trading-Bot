@@ -150,7 +150,7 @@ pub fn run_strategy(
             // Debug: Log every 100th tick per asset
             if tick_count % 100 == 0 {
                 let price_dollars = update.price as f64 / 100.0;
-                println!("[STRATEGY] {} Tick #{}: price=${:.2}, mom_60={:.4}%, mom_15={:.4}%, positions={}", 
+                println!("[STRATEGY] {} Tick #{}: price=${:.2}, mom_60={:.4}%, mom_15={:.4}%, signals={}", 
                     asset_name, tick_count, price_dollars, momentum_60 * 100.0, momentum_15 * 100.0, open_positions.len());
                 
                 // Log to database (log all assets, not just BTC)

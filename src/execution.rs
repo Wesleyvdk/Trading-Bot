@@ -144,8 +144,7 @@ pub async fn run_execution(
             );
             println!(" Market:   {} {}", asset_name, market_type);
             println!(" Side:     {}", side_str);
-            println!(" Price:    ${:.2}", price_f);
-            println!(" Size:     ${:.2}", size_f);
+            println!(" Budget:   ${:.2}", size_f);
 
             // Execute trade (live or simulated)
             let mut _order_success = false;
