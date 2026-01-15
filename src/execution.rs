@@ -317,61 +317,64 @@ pub async fn run_execution(
 
             println!("══════════════════════════════════════════════════\n");
 
-            // Log trade to database
-            let ticker = format!("{}-{}", asset_name, market_type);
-            let side_db = if is_sell {
-                if trade.side == 0 {
-                    "sell_no"
+            // Only log and track P&L for successfully executed trades
+            if _order_success {
+                // Log trade to database
+                let ticker = format!("{}-{}", asset_name, market_type);
+                let side_db = if is_sell {
+                    if trade.side == 0 {
+                        "sell_no"
+                    } else {
+                        "sell_yes"
+                    }
                 } else {
-                    "sell_yes"
+                    if trade.side == 0 {
+                        "buy_yes"
+                    } else {
+                        "buy_no"
+                    }
+                };
+
+                db_logger.log_trade(TradeLogMsg {
+                    ticker: ticker.clone(),
+                    side: side_db.to_string(),
+                    price: price_f,
+                    size: size_f,
+                    value: price_f * size_f,
+                    latency_ms: None, // TODO: Calculate tick-to-trade latency
+                    pnl: Some(profit),
+                });
+
+                // Log trade execution with PnL to activity log
+                let pnl_pct = (profit / size_f) * 100.0;
+
+                // Update risk tier based on P&L
+                let old_tier = risk_manager.current_tier();
+                let new_tier = risk_manager.update_pnl(profit);
+
+                // Log tier transition if changed
+                if old_tier != new_tier {
+                    db_logger.log_activity("info", "system", 
+                        &format!("Risk tier changed: {} → {}", old_tier.name(), new_tier.name()),
+                        Some(format!(r#"{{"old_tier": "{}", "new_tier": "{}", "session_pnl": {:.2}, "new_trade_size": {}}}"#,
+                            old_tier.name(), new_tier.name(), risk_manager.get_session_pnl(), new_tier.trade_size())));
                 }
-            } else {
-                if trade.side == 0 {
-                    "buy_yes"
-                } else {
-                    "buy_no"
+
+                db_logger.log_activity(
+                    if profit >= 0.0 { "success" } else { "warning" }, 
+                    "trade", 
+                    &format!("{}: {} | PnL: ${:.2} ({:.1}%) | Balance: ${:.2} | Tier: {}", 
+                        ticker, side_db, profit, pnl_pct, total_balance, new_tier.name()),
+                    Some(format!(r#"{{"ticker": "{}", "side": "{}", "price": {:.2}, "size": {:.2}, "pnl": {:.2}, "pnl_pct": {:.2}, "total_balance": {:.2}, "total_profit": {:.2}, "trade_count": {}, "tier": "{}", "session_pnl": {:.2}}}"#,
+                        ticker, side_db, price_f, size_f, profit, pnl_pct, total_balance, _total_profit, trade_count, new_tier.name(), risk_manager.get_session_pnl())));
+
+                // Log wallet balance if changed significantly
+                if (total_balance - last_logged_balance).abs() > 0.01 {
+                    if let Err(e) = insert_wallet_balance(&db_pool, total_balance, "USDC").await {
+                        eprintln!("[WALLET] DB error: {:?}", e);
+                    }
+                    last_logged_balance = total_balance;
                 }
-            };
-
-            db_logger.log_trade(TradeLogMsg {
-                ticker: ticker.clone(),
-                side: side_db.to_string(),
-                price: price_f,
-                size: size_f,
-                value: price_f * size_f,
-                latency_ms: None, // TODO: Calculate tick-to-trade latency
-                pnl: Some(profit),
-            });
-
-            // Log trade execution with PnL to activity log
-            let pnl_pct = (profit / size_f) * 100.0;
-
-            // Update risk tier based on P&L
-            let old_tier = risk_manager.current_tier();
-            let new_tier = risk_manager.update_pnl(profit);
-
-            // Log tier transition if changed
-            if old_tier != new_tier {
-                db_logger.log_activity("info", "system", 
-                    &format!("Risk tier changed: {} → {}", old_tier.name(), new_tier.name()),
-                    Some(format!(r#"{{"old_tier": "{}", "new_tier": "{}", "session_pnl": {:.2}, "new_trade_size": {}}}"#,
-                        old_tier.name(), new_tier.name(), risk_manager.get_session_pnl(), new_tier.trade_size())));
-            }
-
-            db_logger.log_activity(
-                if profit >= 0.0 { "success" } else { "warning" }, 
-                "trade", 
-                &format!("{}: {} | PnL: ${:.2} ({:.1}%) | Balance: ${:.2} | Tier: {}", 
-                    ticker, side_db, profit, pnl_pct, total_balance, new_tier.name()),
-                Some(format!(r#"{{"ticker": "{}", "side": "{}", "price": {:.2}, "size": {:.2}, "pnl": {:.2}, "pnl_pct": {:.2}, "total_balance": {:.2}, "total_profit": {:.2}, "trade_count": {}, "tier": "{}", "session_pnl": {:.2}}}"#,
-                    ticker, side_db, price_f, size_f, profit, pnl_pct, total_balance, _total_profit, trade_count, new_tier.name(), risk_manager.get_session_pnl())));
-
-            // Log wallet balance if changed significantly
-            if (total_balance - last_logged_balance).abs() > 0.01 {
-                if let Err(e) = insert_wallet_balance(&db_pool, total_balance, "USDC").await {
-                    eprintln!("[WALLET] DB error: {:?}", e);
-                }
-                last_logged_balance = total_balance;
             }
         }
 
