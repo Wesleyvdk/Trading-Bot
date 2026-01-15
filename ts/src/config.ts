@@ -15,6 +15,12 @@ export const CONFIG = {
     TRADE_SIZE_USD: 10, // $10 per trade
     LIVE_MODE: true, // Set to false for dry run
     
+    // Value Strategy Parameters
+    MAX_ENTRY_PRICE: 0.65,      // Don't buy shares above $0.65
+    MIN_UPSIDE: 0.30,           // Require at least 30% potential upside  
+    MAX_SPREAD: 0.10,           // Max bid-ask spread to accept
+    PRICE_CACHE_TTL_MS: 5000,   // Cache prices for 5 seconds
+    
     // Secrets
     POLYMARKET_PRIVATE_KEY: process.env.POLYMARKET_PRIVATE_KEY,
     POLYMARKET_API_KEY: process.env.POLYMARKET_API_KEY,

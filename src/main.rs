@@ -2,6 +2,7 @@ mod database;
 mod execution;
 mod ingestion;
 mod polymarket;
+mod prices;
 mod risk;
 mod strategy;
 mod types;

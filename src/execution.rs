@@ -184,32 +184,73 @@ pub async fn run_execution(
                             let token_id = &market.token_ids[idx];
                             println!(" Token ID: {}...", &token_id[..20.min(token_id.len())]);
 
-                            println!(" Status:   ⏳ PLACING ORDER...");
-
-                            // Place the order directly using the high-level client method
-                            match client
-                                .place_order(
-                                    token_id,
-                                    if is_sell {
-                                        crate::polymarket::OrderSide::SELL
-                                    } else {
-                                        crate::polymarket::OrderSide::BUY
-                                    },
-                                    size_f,
-                                    price_f,
-                                )
-                                .await
-                            {
-                                Ok(id) => {
-                                    _order_success = true;
-                                    _order_id = Some(id.clone());
-                                    println!(" Status:   ✅ ORDER PLACED: {}", id);
-                                    total_balance += profit;
-                                    _total_profit += profit;
+                            // ============================================
+                            // VALUE FILTERING: Check price before trading
+                            // ============================================
+                            println!(" Status:   ⏳ FETCHING ORDERBOOK PRICE...");
+                            
+                            let orderbook = crate::prices::fetch_orderbook(token_id).await;
+                            
+                            if let Some((bid, ask)) = orderbook {
+                                let entry_price = ask; // We pay the ask
+                                println!(" Orderbook: bid=${:.3}, ask=${:.3}", bid, ask);
+                                
+                                // Apply value filters
+                                match crate::prices::passes_value_filters(entry_price, bid, ask) {
+                                    Ok((upside, spread)) => {
+                                        println!(" Filters:  ✅ PASSED (upside={:.1}%, spread={:.1}%)", 
+                                            upside * 100.0, spread * 100.0);
+                                        
+                                        println!(" Status:   ⏳ PLACING ORDER @ ${:.3}...", entry_price);
+                                        
+                                        // Place the order with actual orderbook price
+                                        match client
+                                            .place_order(
+                                                token_id,
+                                                if is_sell {
+                                                    crate::polymarket::OrderSide::SELL
+                                                } else {
+                                                    crate::polymarket::OrderSide::BUY
+                                                },
+                                                size_f,
+                                                entry_price, // Use actual orderbook price
+                                            )
+                                            .await
+                                        {
+                                            Ok(id) => {
+                                                _order_success = true;
+                                                _order_id = Some(id.clone());
+                                                // Recalculate profit with actual price
+                                                let actual_shares = size_f / entry_price;
+                                                let actual_profit = actual_shares * 1.0 - size_f;
+                                                println!(" Status:   ✅ ORDER PLACED: {}", id);
+                                                println!(" Actual:   {} shares @ ${:.3}, profit=${:.2} if win", 
+                                                    actual_shares, entry_price, actual_profit);
+                                                total_balance += actual_profit;
+                                                _total_profit += actual_profit;
+                                            }
+                                            Err(e) => {
+                                                println!(" Status:   ❌ ORDER FAILED: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(reason) => {
+                                        println!(" Filters:  ⏭️ SKIPPED - {}", reason);
+                                        println!("           price=${:.3}, max=${:.2}", 
+                                            entry_price, crate::prices::MAX_ENTRY_PRICE);
+                                        
+                                        // Log skipped trade to activity log
+                                        db_logger.log_activity(
+                                            "info",
+                                            "filter",
+                                            &format!("{} {} skipped: {}", asset_name, market_type, reason),
+                                            Some(format!(r#"{{"asset": "{}", "market": "{}", "reason": "{}", "price": {:.3}, "bid": {:.3}, "ask": {:.3}}}"#,
+                                                asset_name, market_type, reason, entry_price, bid, ask)),
+                                        );
+                                    }
                                 }
-                                Err(e) => {
-                                    println!(" Status:   ❌ ORDER FAILED: {}", e);
-                                }
+                            } else {
+                                println!(" Status:   ❌ COULD NOT FETCH ORDERBOOK");
                             }
                         } else {
                             println!(
