@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.polymarket.com)",
+      "Bash(curl:*)",
+      "Bash(bun run:*)",
+      "Bash(bun build:*)"
+    ]
+  }
+}

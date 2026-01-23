@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket Bot - Data Dashboard</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: #00ff88; margin-bottom: 20px; }
+        h2 { color: #00ccff; margin: 20px 0 10px; font-size: 1.2em; }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .stat-card .label { color: #888; font-size: 0.9em; }
+        .stat-card .value { color: #00ff88; font-size: 2em; font-weight: bold; }
+        .stat-card .subtext { color: #666; font-size: 0.8em; margin-top: 5px; }
+
+        .section {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+        th { color: #00ccff; background: #0f0f1a; }
+        tr:hover { background: #252540; }
+
+        .win { color: #00ff88; }
+        .loss { color: #ff4444; }
+        .neutral { color: #888; }
+
+        .pattern-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        .pattern-card {
+            background: #0f0f1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+        }
+        .pattern-card h3 {
+            color: #00ccff;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+
+        .bar {
+            height: 8px;
+            background: #333;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        .bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00ff88, #00ccff);
+            transition: width 0.3s;
+        }
+
+        .refresh-btn {
+            background: #00ccff;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .refresh-btn:hover { background: #00ff88; }
+
+        .loading { color: #888; font-style: italic; }
+        .error { color: #ff4444; }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 5px;
+            cursor: pointer;
+            color: #888;
+        }
+        .tab.active {
+            background: #00ccff;
+            color: #000;
+            border-color: #00ccff;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Polymarket Bot - Data Dashboard</h1>
+
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="label">BTC Price Ticks</div>
+                <div class="value" id="stat-ticks">-</div>
+                <div class="subtext" id="stat-span">Loading...</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Market Windows</div>
+                <div class="value" id="stat-windows">-</div>
+                <div class="subtext" id="stat-completed">- completed</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Share Snapshots</div>
+                <div class="value" id="stat-snapshots">-</div>
+                <div class="subtext">Price recordings</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Analysis Status</div>
+                <div class="value" id="stat-status">-</div>
+                <div class="subtext" id="stat-status-msg">Checking...</div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="strategy">Strategy</div>
+            <div class="tab" data-tab="patterns">Patterns</div>
+            <div class="tab" data-tab="windows">Windows</div>
+            <div class="tab" data-tab="signals">Signals</div>
+        </div>
+
+        <div id="strategy" class="tab-content active">
+            <div class="section">
+                <h2>⚔️ Strategy Comparison (Last 7 Days)</h2>
+                <div class="stats-grid" id="strategy-comparison">
+                    <p class="loading">Loading strategy comparison...</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>📝 Recent Trades</h2>
+                <div class="tabs" style="margin-bottom: 10px;">
+                    <div class="tab active" data-strategy="latency" style="padding: 5px 15px; font-size: 0.9em;">Latency</div>
+                    <div class="tab" data-strategy="momentum" style="padding: 5px 15px; font-size: 0.9em;">Momentum</div>
+                </div>
+                <table id="trades-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Asset</th>
+                            <th>Type</th>
+                            <th>Dir</th>
+                            <th>Entry</th>
+                            <th>Edge</th>
+                            <th>P&L</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-body">
+                        <tr><td colspan="8" class="loading">Loading trades...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="patterns" class="tab-content">
+            <div class="section">
+                <h2>📈 Pattern Analysis - 15 Minute Markets</h2>
+                <div class="pattern-grid" id="patterns-15m">
+                    <p class="loading">Loading patterns...</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>📈 Pattern Analysis - Hourly Markets</h2>
+                <div class="pattern-grid" id="patterns-60m">
+                    <p class="loading">Loading patterns...</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="windows" class="tab-content">
+            <div class="section">
+                <h2>📊 Completed Market Windows (Last 7 Days)</h2>
+                <table id="windows-table">
+                    <thead>
+                        <tr>
+                            <th>Asset</th>
+                            <th>Type</th>
+                            <th>Window Start</th>
+                            <th>Strike Price</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody id="windows-body">
+                        <tr><td colspan="5" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="signals" class="tab-content">
+            <div class="section">
+                <h2>🎯 Recent Trading Signals (Last 24h)</h2>
+                <table id="signals-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Asset</th>
+                            <th>Type</th>
+                            <th>Signal</th>
+                            <th>Confidence</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="signals-body">
+                        <tr><td colspan="6" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <button class="refresh-btn" onclick="loadAllData()">Refresh Data</button>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3001';
+
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        async function fetchData(endpoint) {
+            try {
+                const res = await fetch(`${API_BASE}${endpoint}`);
+                return await res.json();
+            } catch (e) {
+                console.error('Fetch error:', e);
+                return null;
+            }
+        }
+
+        async function loadStats() {
+            const data = await fetchData('/api/data/summary');
+            if (!data) return;
+
+            document.getElementById('stat-ticks').textContent = data.collection.btc_ticks.toLocaleString();
+            document.getElementById('stat-span').textContent = `${data.collection.data_span_days.toFixed(1)} days of data`;
+            document.getElementById('stat-windows').textContent = data.collection.market_windows;
+            document.getElementById('stat-completed').textContent = `${data.collection.completed_windows} completed`;
+            document.getElementById('stat-snapshots').textContent = data.collection.share_snapshots.toLocaleString();
+            document.getElementById('stat-status').textContent = data.status.ready ? '✅' : '⏳';
+            document.getElementById('stat-status-msg').textContent = data.status.message;
+        }
+
+        async function loadPatterns(marketType, containerId) {
+            const data = await fetchData(`/api/data/patterns?type=${marketType}`);
+            const container = document.getElementById(containerId);
+
+            if (!data || data.pattern_count === 0) {
+                container.innerHTML = '<p class="neutral">No patterns found yet. Collect more data.</p>';
+                return;
+            }
+
+            let html = '';
+            for (const [name, values] of Object.entries(data.patterns)) {
+                const displayName = name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+                if (values.length === 1 && values[0].minute_bucket === null) {
+                    // Single value pattern
+                    const v = values[0];
+                    const winPct = (v.win_rate * 100).toFixed(1);
+                    html += `
+                        <div class="pattern-card">
+                            <h3>${displayName}</h3>
+                            <div>Win Rate: <span class="${v.win_rate > 0.5 ? 'win' : 'loss'}">${winPct}%</span></div>
+                            <div class="bar"><div class="bar-fill" style="width: ${winPct}%"></div></div>
+                            <div style="color: #666; margin-top: 5px">n=${v.sample_count}</div>
+                        </div>
+                    `;
+                } else {
+                    // Time-series pattern - show best/worst
+                    const best = values.reduce((a, b) => a.win_rate > b.win_rate ? a : b);
+                    const worst = values.reduce((a, b) => a.win_rate < b.win_rate ? a : b);
+                    html += `
+                        <div class="pattern-card">
+                            <h3>${displayName}</h3>
+                            <div>Best: Minute ${best.minute_bucket} (<span class="win">${(best.win_rate * 100).toFixed(1)}%</span>)</div>
+                            <div>Worst: Minute ${worst.minute_bucket} (<span class="loss">${(worst.win_rate * 100).toFixed(1)}%</span>)</div>
+                            <div style="color: #666; margin-top: 5px">${values.length} time buckets</div>
+                        </div>
+                    `;
+                }
+            }
+
+            container.innerHTML = html;
+        }
+
+        async function loadWindows() {
+            const data15 = await fetchData('/api/data/windows?type=15-MIN&days=7');
+            const data60 = await fetchData('/api/data/windows?type=60-MIN&days=7');
+
+            const windows = [
+                ...(data15?.windows || []),
+                ...(data60?.windows || [])
+            ].sort((a, b) => new Date(b.window_start) - new Date(a.window_start));
+
+            const tbody = document.getElementById('windows-body');
+
+            if (windows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="neutral">No completed windows yet</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = windows.slice(0, 50).map(w => `
+                <tr>
+                    <td>${w.asset}</td>
+                    <td>${w.market_type}</td>
+                    <td>${new Date(w.window_start).toLocaleString()}</td>
+                    <td>$${w.strike_price?.toFixed(2) || '-'}</td>
+                    <td class="${w.outcome === 'UP' ? 'win' : 'loss'}">${w.outcome}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadSignals() {
+            const data = await fetchData('/api/data/signals?hours=24');
+            const tbody = document.getElementById('signals-body');
+
+            if (!data || data.signals.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="neutral">No signals yet</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = data.signals.map(s => `
+                <tr>
+                    <td>${new Date(s.created_at).toLocaleTimeString()}</td>
+                    <td>${s.asset}</td>
+                    <td>${s.market_type}</td>
+                    <td class="${s.signal_type === 'ENTRY' ? 'win' : s.signal_type === 'EXIT' ? 'loss' : 'neutral'}">
+                        ${s.signal_type} ${s.direction || ''}
+                    </td>
+                    <td>${(s.confidence * 100).toFixed(0)}%</td>
+                    <td style="font-size: 0.9em">${s.reason}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadAllData() {
+            await Promise.all([
+                loadStats(),
+                loadStrategyComparison(),
+                loadTrades('latency'),
+                loadPatterns('15-MIN', 'patterns-15m'),
+                loadPatterns('60-MIN', 'patterns-60m'),
+                loadWindows(),
+                loadSignals()
+            ]);
+        }
+
+        // Strategy comparison loading
+        async function loadStrategyComparison() {
+            const data = await fetchData('/api/strategies?days=7');
+            const container = document.getElementById('strategy-comparison');
+
+            if (!data) {
+                container.innerHTML = '<p class="neutral">No strategy data available yet.</p>';
+                return;
+            }
+
+            const formatWinRate = (rate) => rate ? `${(rate * 100).toFixed(1)}%` : 'N/A';
+            const formatPnl = (pnl) => {
+                if (!pnl) return '$0.00';
+                return pnl >= 0 ? `<span class="win">+$${pnl.toFixed(2)}</span>` : `<span class="loss">-$${Math.abs(pnl).toFixed(2)}</span>`;
+            };
+
+            container.innerHTML = `
+                <div class="stat-card">
+                    <div class="label">📈 Momentum Strategy</div>
+                    <div class="value">${data.momentum.trades}</div>
+                    <div class="subtext">trades</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Momentum Win Rate</div>
+                    <div class="value ${data.momentum.winRate > 0.5 ? 'win' : 'loss'}">${formatWinRate(data.momentum.winRate)}</div>
+                    <div class="subtext">${data.momentum.wins}/${data.momentum.trades - data.momentum.wins}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Momentum P&L</div>
+                    <div class="value">${formatPnl(data.momentum.pnl)}</div>
+                    <div class="subtext">total</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">⚡ Latency Strategy</div>
+                    <div class="value">${data.latency.trades}</div>
+                    <div class="subtext">trades</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Latency Win Rate</div>
+                    <div class="value ${data.latency.winRate > 0.5 ? 'win' : 'loss'}">${formatWinRate(data.latency.winRate)}</div>
+                    <div class="subtext">${data.latency.wins}/${data.latency.trades - data.latency.wins}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Latency P&L</div>
+                    <div class="value">${formatPnl(data.latency.pnl)}</div>
+                    <div class="subtext">total</div>
+                </div>
+            `;
+        }
+
+        // Trade history loading
+        let currentStrategy = 'latency';
+        async function loadTrades(strategy) {
+            currentStrategy = strategy;
+            const data = await fetchData(`/api/trades?strategy=${strategy}&limit=20`);
+            const tbody = document.getElementById('trades-body');
+
+            if (!data || data.trades.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="neutral">No ${strategy} trades yet</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = data.trades.map(t => `
+                <tr>
+                    <td>${new Date(t.entryTime).toLocaleTimeString()}</td>
+                    <td>${t.asset}</td>
+                    <td>${t.marketType}</td>
+                    <td class="${t.direction === 'UP' ? 'win' : 'loss'}">${t.direction}</td>
+                    <td>$${t.entryPrice.toFixed(3)}</td>
+                    <td>${(t.expectedEdge * 100).toFixed(1)}%</td>
+                    <td class="${t.realizedPnl >= 0 ? 'win' : 'loss'}">
+                        ${t.realizedPnl !== null ? (t.realizedPnl >= 0 ? '+' : '') + '$' + t.realizedPnl.toFixed(2) : '-'}
+                    </td>
+                    <td class="${t.outcome === 'WIN' ? 'win' : t.outcome === 'LOSS' ? 'loss' : 'neutral'}">${t.outcome}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Strategy tab switching
+        document.querySelectorAll('[data-strategy]').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('[data-strategy]').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                loadTrades(tab.dataset.strategy);
+            });
+        });
+
+        // Initial load
+        loadAllData();
+
+        // Auto-refresh every 60 seconds
+        setInterval(loadAllData, 60000);
+    </script>
+</body>
+</html>

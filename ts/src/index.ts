@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import { CONFIG } from "./config";
 import { initializeClient } from "./client";
-import { updateMarkets } from "./market";
+import { updateMarkets, refetchMissingStrikePrices, countMissingStrikePrices } from "./market";
 import { processPriceUpdate } from "./strategy";
 import type { Market } from "./types";
 import { AssetType } from "@polymarket/clob-client";
@@ -29,9 +29,20 @@ async function main() {
     // 3. Market Discovery
     console.log("🔎 Discovering Markets...");
     markets = await updateMarkets(client);
+
+    // Full market refresh every 5 minutes
     setInterval(async () => {
         markets = await updateMarkets(client);
     }, 5 * 60 * 1000);
+
+    // Re-fetch missing strike prices every 30 seconds
+    // This catches markets that just started and haven't had their strike price set yet
+    setInterval(async () => {
+        const missingCount = countMissingStrikePrices(markets);
+        if (missingCount > 0) {
+            markets = await refetchMissingStrikePrices(markets);
+        }
+    }, 30 * 1000);
 
     // 4. Connect to Binance
     console.log(`Connecting to ${CONFIG.BINANCE_WS_URL}...`);

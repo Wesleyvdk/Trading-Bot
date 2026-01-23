@@ -33,3 +33,6 @@ trading-bot.service
 
 *.txt
 /.vscode
+
+# Temporary files
+tmpclaude-*

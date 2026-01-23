@@ -6,6 +6,7 @@ export interface Market {
     end_date_iso: string;
     market_type: "15-MIN" | "60-MIN" | "DAILY";
     asset: string;
+    strike_price: number | null;
 }
 
 export interface PricePoint {
