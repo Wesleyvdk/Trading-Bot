@@ -28,6 +28,9 @@ import { registerPosition, removePosition, getActivePositionCount } from "./posi
 import type { Market } from "./types";
 import { Side } from "@polymarket/clob-client";
 
+// Log prefix to distinguish from momentum bot
+const LOG_PREFIX = "[LATENCY]";
+
 // Session tracking
 let sessionStats = {
     evaluated: 0,
@@ -100,8 +103,8 @@ async function executeTrade(
     const tokenId = direction === "UP" ? market.token_ids[0]! : market.token_ids[1]!;
     const positionKey = getPositionKey(market);
     
-    console.log(`\n🎯 LATENCY TRADE: ${market.asset} ${market.market_type} ${direction}`);
-    console.log(`   Price: $${price.toFixed(3)} | Size: $${sizeUsd.toFixed(2)} | Edge: ${(edge * 100).toFixed(1)}%`);
+    console.log(`\n${LOG_PREFIX} 🎯 TRADE: ${market.asset} ${market.market_type} ${direction}`);
+    console.log(`${LOG_PREFIX}    Price: $${price.toFixed(3)} | Size: $${sizeUsd.toFixed(2)} | Edge: ${(edge * 100).toFixed(1)}%`);
     
     // Record trade in database
     const tradeId = await insertStrategyTrade({
@@ -197,18 +200,18 @@ async function checkPositionExits(): Promise<void> {
  * Main strategy loop
  */
 async function runLoop(client: ClobClient): Promise<void> {
-    console.log("\n🚀 Starting Latency Arbitrage Bot...");
-    console.log(`   Mode: ${CONFIG.LIVE_MODE ? "🔴 LIVE" : "🔶 DRY RUN"}`);
-    console.log(`   Min Edge: ${LATENCY_CONFIG.MIN_EDGE * 100}%`);
-    console.log(`   Time Window: ${LATENCY_CONFIG.MIN_TIME_REMAINING}s - ${LATENCY_CONFIG.MAX_TIME_REMAINING}s`);
-    console.log(`   Max Position: $${LATENCY_CONFIG.MAX_POSITION_SIZE}`);
+    console.log(`\n${LOG_PREFIX} 🚀 Starting Latency Arbitrage Bot...`);
+    console.log(`${LOG_PREFIX}    Mode: ${CONFIG.LIVE_MODE ? "🔴 LIVE" : "🔶 DRY RUN"}`);
+    console.log(`${LOG_PREFIX}    Min Edge: ${LATENCY_CONFIG.MIN_EDGE * 100}%`);
+    console.log(`${LOG_PREFIX}    Time Window: ${LATENCY_CONFIG.MIN_TIME_REMAINING}s - ${LATENCY_CONFIG.MAX_TIME_REMAINING}s`);
+    console.log(`${LOG_PREFIX}    Max Position: $${LATENCY_CONFIG.MAX_POSITION_SIZE}`);
     
     // Initialize Binance WebSocket
     const binanceWS = getBinanceWS();
     await binanceWS.connect();
     
     // Wait for initial prices
-    console.log("⏳ Waiting for price data...");
+    console.log(`${LOG_PREFIX} ⏳ Waiting for price data...`);
     await new Promise(resolve => setTimeout(resolve, 3000));
     
     // Fetch initial markets

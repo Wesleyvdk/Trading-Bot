@@ -305,6 +305,7 @@ export function formatEvaluation(eval_: LatencyEvaluation): string {
     const edgeUpStr = (eval_.edgeUp * 100).toFixed(1);
     
     return [
+        `[LATENCY]`,
         `[${eval_.market.asset} ${eval_.market.market_type}]`,
         `Time: ${timeStr}`,
         `Price: $${priceStr} / Strike: $${strikeStr}`,
