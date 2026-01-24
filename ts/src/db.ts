@@ -166,6 +166,12 @@ export async function initDataTables(): Promise<void> {
         )
     `;
 
+    // Ensure created_at exists (in case table existed without it)
+    await sql`
+        ALTER TABLE strategy_logs 
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
+    `;
+
     // Create index for time-based queries
     await sql`
         CREATE INDEX IF NOT EXISTS idx_strategy_logs_created_at

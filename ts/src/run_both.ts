@@ -33,11 +33,19 @@ async function main() {
         process.exit(1);
     }
 
-    // Start momentum bot with --no-collect to avoid duplicate data collection
-    // (latency bot has its own Binance WebSocket)
+    // Pass through arguments (like --collect)
+    // Default to --no-collect if not specified, to prevent accidental double-collection if running both
+    const args = process.argv.slice(2);
+    const childArgs = ["run", path.join(srcDir, "index_v2.ts"), ...args];
+    
+    // If no args provided, default to --no-collect for safety
+    if (args.length === 0) {
+        childArgs.push("--no-collect");
+    }
+
     console.log("🚀 Starting Momentum Bot...");
     const momentum = spawn({
-        cmd: ["bun", "run", path.join(srcDir, "index_v2.ts"), "--no-collect"],
+        cmd: ["bun", ...childArgs],
         stdout: "inherit",
         stderr: "inherit"
     });
