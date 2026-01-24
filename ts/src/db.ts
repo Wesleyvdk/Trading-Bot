@@ -153,6 +153,25 @@ export async function initDataTables(): Promise<void> {
         )
     `;
 
+    // Strategy logs - high frequency strategy state tracking
+    await sql`
+        CREATE TABLE IF NOT EXISTS strategy_logs (
+            id BIGSERIAL PRIMARY KEY,
+            tick_number INT NOT NULL,
+            price DECIMAL(18, 8) NOT NULL,
+            momentum_60 DECIMAL(10, 6),
+            momentum_15 DECIMAL(10, 6),
+            open_positions INT DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    `;
+
+    // Create index for time-based queries
+    await sql`
+        CREATE INDEX IF NOT EXISTS idx_strategy_logs_created_at
+        ON strategy_logs (created_at DESC)
+    `;
+
     console.log("✅ Data collection tables initialized");
 }
 
@@ -297,6 +316,23 @@ export async function updateTradeOutcome(
             realized_pnl = ${realizedPnl},
             outcome = ${outcome}
         WHERE id = ${tradeId}
+    `;
+}
+
+/**
+ * Insert a strategy log entry (heartbeat/state)
+ */
+export async function insertStrategyLog(
+    tickNumber: number,
+    price: number,
+    momentum60: number | null,
+    momentum15: number | null,
+    openPositions: number
+): Promise<void> {
+    const sql = getDb();
+    await sql`
+        INSERT INTO strategy_logs (tick_number, price, momentum_60, momentum_15, open_positions)
+        VALUES (${tickNumber}, ${price}, ${momentum60}, ${momentum15}, ${openPositions})
     `;
 }
 

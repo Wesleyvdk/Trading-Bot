@@ -8,6 +8,7 @@
 
 import { spawn, type Subprocess } from "bun";
 import path from "path";
+import { CONFIG } from "./config"; // Load env vars
 import { initDataTables } from "./db";
 
 const srcDir = path.dirname(import.meta.path);

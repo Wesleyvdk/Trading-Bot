@@ -1,17 +1,18 @@
 // Enhanced Strategy V2 - Data-Driven Dynamic Trading
 // Uses historical pattern analysis for optimal entry/exit decisions
 
-import { Market, PricePoint, TradeOpportunity } from "./types";
+import type { Market, PricePoint, TradeOpportunity } from "./types";
 import { ClobClient, Side } from "@polymarket/clob-client";
 import { CONFIG } from "./config";
 import { placeOrder } from "./execution";
 import { getMarketPrices, calculateSpread, calculateUpside } from "./prices";
 import { getSignals } from "./pattern_analyzer";
-import { insertTradingSignal, upsertMarketWindow } from "./db";
+import { insertTradingSignal, upsertMarketWindow, insertStrategyLog } from "./db";
 
 // Price history for momentum calculation
 let prices: PricePoint[] = [];
 let lastTradeTime = 0;
+let tickCounter = 0;
 
 // Position tracking
 interface Position {
@@ -72,6 +73,24 @@ export async function processPriceUpdateV2(
     // Log status periodically
     if (Math.random() < 0.005) {
         console.log(`[V2] BTC: $${currentPrice.toFixed(2)} | Positions: ${activePositions.size}/${STRATEGY_CONFIG.MAX_POSITIONS}`);
+    }
+
+    // Log strategy state to DB every 100 ticks (approx 10-15 seconds)
+    tickCounter++;
+    if (tickCounter % 100 === 0) {
+        // console.log(`[V2] 📝 Logging strategy state (Tick ${tickCounter})...`);
+        const momentum = getCurrentMomentumV2();
+        try {
+            await insertStrategyLog(
+                tickCounter,
+                currentPrice,
+                momentum?.mom60 ?? null,
+                momentum?.mom15 ?? null,
+                activePositions.size
+            );
+        } catch (e) {
+            console.error("❌ Failed to insert strategy log:", e);
+        }
     }
 }
 

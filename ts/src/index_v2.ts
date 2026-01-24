@@ -130,7 +130,7 @@ async function main() {
 
             await processPriceUpdateV2(price, time, client, markets);
         } catch (e) {
-            // Ignore parse errors
+            console.error("❌ Error processing price update:", e);
         }
     };
 
