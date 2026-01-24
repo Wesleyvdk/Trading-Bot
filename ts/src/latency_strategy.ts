@@ -191,17 +191,6 @@ export function evaluateMarket(
         return baseEvaluation;
     }
     
-    // Check time window
-    if (timeRemainingSeconds < config.MIN_TIME_REMAINING) {
-        baseEvaluation.reason = `Too late: ${timeRemainingSeconds.toFixed(0)}s remaining`;
-        return baseEvaluation;
-    }
-    
-    if (timeRemainingSeconds > config.MAX_TIME_REMAINING) {
-        baseEvaluation.reason = `Too early: ${timeRemainingSeconds.toFixed(0)}s remaining`;
-        return baseEvaluation;
-    }
-    
     // Calculate price delta
     const priceDelta = currentPrice - strikePrice;
     const deltaPercent = (priceDelta / strikePrice) * 100;
@@ -214,12 +203,10 @@ export function evaluateMarket(
     const trueProbDown = 1 - trueProbUp;
     
     // Calculate edges
-    // For buying UP: edge = true_prob_up - price_to_buy_up (ask price)
-    // For buying DOWN: edge = true_prob_down - price_to_buy_down (ask price)
     const edgeUp = trueProbUp - marketPrices.up_ask;
     const edgeDown = trueProbDown - marketPrices.down_ask;
     
-    // Fill in evaluation
+    // Fill in evaluation with calculated stats
     const evaluation: LatencyEvaluation = {
         ...baseEvaluation,
         currentPrice,
@@ -232,6 +219,17 @@ export function evaluateMarket(
         edgeDown,
         volatility
     };
+
+    // Check time window
+    if (timeRemainingSeconds < config.MIN_TIME_REMAINING) {
+        evaluation.reason = `Too late: ${timeRemainingSeconds.toFixed(0)}s remaining`;
+        return evaluation;
+    }
+    
+    if (timeRemainingSeconds > config.MAX_TIME_REMAINING) {
+        evaluation.reason = `Too early: ${timeRemainingSeconds.toFixed(0)}s remaining`;
+        return evaluation;
+    }
     
     // Determine best side
     let bestSide: "UP" | "DOWN" | null = null;
