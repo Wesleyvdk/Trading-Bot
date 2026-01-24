@@ -29,6 +29,7 @@ const priceCache = new Map<string, { data: MarketPrices; expiry: number }>();
  */
 export async function getTokenPrice(tokenId: string): Promise<number | null> {
     try {
+        await globalRateLimiter.waitForToken(); // Wait for rate limit
         const url = `${CONFIG.POLYMARKET_CLOB_URL}/price?token_id=${tokenId}&side=buy`;
         const response = await fetch(url);
         
@@ -48,8 +49,15 @@ export async function getTokenPrice(tokenId: string): Promise<number | null> {
 /**
  * Fetch the orderbook for a token and extract best bid/ask
  */
+import { globalRateLimiter } from "./rate_limiter";
+
+// ... (imports)
+
+// ... (getTokenPrice function)
+
 export async function getOrderbook(tokenId: string): Promise<{ bid: number; ask: number } | null> {
     try {
+        await globalRateLimiter.waitForToken(); // Wait for rate limit
         const url = `${CONFIG.POLYMARKET_CLOB_URL}/book?token_id=${tokenId}`;
         const response = await fetch(url);
         

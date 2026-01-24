@@ -22,7 +22,8 @@ import {
     insertStrategyTrade, 
     updateTradeOutcome,
     getDailyPerformance,
-    initDataTables 
+    initDataTables,
+    insertLatencyLog 
 } from "./db";
 import { registerPosition, removePosition, getActivePositionCount } from "./position_sizing";
 import type { Market } from "./types";
@@ -258,6 +259,20 @@ async function runLoop(client: ClobClient): Promise<void> {
                 // Log evaluation every 10th market or if tradeable
                 if (shouldTrade(evaluation) || sessionStats.evaluated % 10 === 0) {
                     console.log(formatEvaluation(evaluation));
+                    
+                    // Log to database
+                    insertLatencyLog(
+                        market.asset,
+                        market.market_type,
+                        evaluation.timeRemainingSeconds,
+                        evaluation.currentPrice,
+                        evaluation.strikePrice,
+                        evaluation.deltaPercent,
+                        evaluation.trueProbabilityUp,
+                        evaluation.marketPriceUp, // Using marketPriceUp as proxy for market prob
+                        evaluation.edgeUp,
+                        evaluation.reason
+                    ).catch(e => console.error("❌ Failed to log latency eval:", e));
                 }
                 
                 // Execute if tradeable

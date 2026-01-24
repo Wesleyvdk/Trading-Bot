@@ -12,6 +12,7 @@ import { insertTradingSignal, upsertMarketWindow, insertStrategyLog } from "./db
 // Price history for momentum calculation
 let prices: PricePoint[] = [];
 let lastTradeTime = 0;
+let lastScanTime = 0;
 let tickCounter = 0;
 
 // Position tracking
@@ -64,8 +65,14 @@ export async function processPriceUpdateV2(
     await checkPositionsForExit(client, currentPrice);
 
     // 2. Look for new entry opportunities
+    // Throttle scanning to every 5 seconds to avoid API rate limits and loop lag
     if (activePositions.size < STRATEGY_CONFIG.MAX_POSITIONS) {
-        if (now - lastTradeTime >= STRATEGY_CONFIG.COOLDOWN_MS) {
+        if (now - lastTradeTime >= STRATEGY_CONFIG.COOLDOWN_MS && now - lastScanTime >= 5000) {
+            lastScanTime = now;
+            // Don't await this, let it run in background so we don't block price updates?
+            // Actually, we should await it but ensure it doesn't take too long.
+            // With rate limiting, it might take a while.
+            // Let's run it but catch errors.
             await findEntryOpportunities(client, markets, currentPrice, now);
         }
     }
@@ -78,7 +85,7 @@ export async function processPriceUpdateV2(
     // Log strategy state to DB every 100 ticks (approx 10-15 seconds)
     tickCounter++;
     if (tickCounter % 100 === 0) {
-        // console.log(`[V2] 📝 Logging strategy state (Tick ${tickCounter})...`);
+        console.log(`[V2] 📝 Logging strategy state (Tick ${tickCounter})...`);
         const momentum = getCurrentMomentumV2();
         try {
             await insertStrategyLog(

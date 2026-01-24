@@ -178,6 +178,30 @@ export async function initDataTables(): Promise<void> {
         ON strategy_logs (created_at DESC)
     `;
 
+    // Latency logs - evaluations from latency arbitrage bot
+    await sql`
+        CREATE TABLE IF NOT EXISTS latency_logs (
+            id BIGSERIAL PRIMARY KEY,
+            asset VARCHAR(10) NOT NULL,
+            market_type VARCHAR(10) NOT NULL,
+            time_remaining INT NOT NULL,
+            price DECIMAL(18, 8) NOT NULL,
+            strike DECIMAL(18, 8) NOT NULL,
+            delta_percent DECIMAL(10, 4),
+            true_prob_up DECIMAL(6, 4),
+            market_prob_up DECIMAL(6, 4),
+            edge_up DECIMAL(6, 4),
+            reason TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    `;
+
+    // Create index for latency logs
+    await sql`
+        CREATE INDEX IF NOT EXISTS idx_latency_logs_created_at
+        ON latency_logs (created_at DESC)
+    `;
+
     console.log("✅ Data collection tables initialized");
 }
 
@@ -339,6 +363,34 @@ export async function insertStrategyLog(
     await sql`
         INSERT INTO strategy_logs (tick_number, price, momentum_60, momentum_15, open_positions)
         VALUES (${tickNumber}, ${price}, ${momentum60}, ${momentum15}, ${openPositions})
+    `;
+}
+
+/**
+ * Insert a latency evaluation log
+ */
+export async function insertLatencyLog(
+    asset: string,
+    marketType: string,
+    timeRemaining: number,
+    price: number,
+    strike: number,
+    deltaPercent: number,
+    trueProbUp: number,
+    marketProbUp: number,
+    edgeUp: number,
+    reason: string
+): Promise<void> {
+    const sql = getDb();
+    await sql`
+        INSERT INTO latency_logs (
+            asset, market_type, time_remaining, price, strike, 
+            delta_percent, true_prob_up, market_prob_up, edge_up, reason
+        )
+        VALUES (
+            ${asset}, ${marketType}, ${timeRemaining}, ${price}, ${strike},
+            ${deltaPercent}, ${trueProbUp}, ${marketProbUp}, ${edgeUp}, ${reason}
+        )
     `;
 }
 
